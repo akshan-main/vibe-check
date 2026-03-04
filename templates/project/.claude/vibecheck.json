@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "minSecondsBetweenQuizzes": 900,
+  "maxDiffChars": 2000
+}

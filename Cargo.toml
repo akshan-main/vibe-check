@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Diff-native comprehension checkpoints for Claude Code"
 license = "MIT"
-repository = "https://github.com/AkshanKrithick/vibecheck"
+repository = "https://github.com/akshan-main/vibe-check"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
