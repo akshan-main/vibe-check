@@ -13,13 +13,15 @@ If there are no changes, say "No code changes to quiz on. Make some changes firs
 
 STEP 2: Analyze the diff and create ONE multiple-choice question.
 
-First, figure out what ACTUALLY CHANGED in the product by reading the diff. Don't count lines — understand the intent:
+IMPORTANT: Focus on the MOST IMPORTANT change, not the largest one. A 2-line behavior change can matter more than 50 lines of boilerplate. Read the entire diff, use your understanding of the code and the product, and pick the single change that has the most meaningful impact on what users experience. Ignore formatting, imports, renaming, and refactors that don't change behavior.
+
+Classify what happened:
 - Was a feature ADDED? (new capability that didn't exist before)
 - Was a feature CHANGED? (existing behavior now works differently)
 - Was something REMOVED? (capability or safeguard that's now gone)
 - Was it a FIX? (broken thing that now works)
 
-Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this change on their product. Vibe coders build products — they need to understand what their product does, not how to read code.
+Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products — they need to understand what their product does, not how to read code.
 
 QUESTION FORMULA — pick one:
   * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
