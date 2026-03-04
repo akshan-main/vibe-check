@@ -328,18 +328,18 @@ do_install() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     # Always install the /vibecheck skill (on-demand command)
-    local skill_dir="$CLAUDE_DIR/skills/vibecheck"
-    local template_skill="$script_dir/../templates/project/.claude/skills/vibecheck/SKILL.md"
+    local skill_dir="$CLAUDE_DIR/skills/quiz"
+    local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
     mkdir -p "$skill_dir"
     if [[ -f "$template_skill" ]]; then
         cp "$template_skill" "$skill_dir/SKILL.md"
-        ok "Skill /vibecheck installed (on-demand quiz)."
+        ok "Skill /quiz installed (on-demand quiz)."
     fi
 
     if $SKILL_ONLY; then
         echo ""
         ok "VibeCheck installed (skill only)!"
-        info "Type /vibecheck in Claude Code to quiz yourself on your current diff."
+        info "Type /quiz in Claude Code to quiz yourself on your current diff."
         return 0
     fi
 
@@ -404,10 +404,10 @@ JSONEOF
     info "Config: $CLAUDE_DIR/$CONFIG_NAME"
     info "Binary: $binary_dest"
     info "Settings: $SETTINGS_FILE"
-    info "Skill: /vibecheck (on-demand quiz)"
+    info "Skill: /quiz (on-demand quiz)"
     echo ""
     info "Start using Claude Code — VibeCheck will auto-trigger after code changes."
-    info "Or type /vibecheck anytime for an on-demand quiz."
+    info "Or type /quiz anytime for an on-demand quiz."
 }
 
 # ---- Uninstall ----
@@ -427,9 +427,9 @@ do_uninstall() {
     fi
 
     # Remove skill
-    if [[ -d "$CLAUDE_DIR/skills/vibecheck" ]]; then
-        rm -rf "$CLAUDE_DIR/skills/vibecheck"
-        ok "Skill /vibecheck removed."
+    if [[ -d "$CLAUDE_DIR/skills/quiz" ]]; then
+        rm -rf "$CLAUDE_DIR/skills/quiz"
+        ok "Skill /quiz removed."
     fi
 
     # Remove from settings.json

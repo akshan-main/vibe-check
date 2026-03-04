@@ -336,37 +336,39 @@ STEP 2: Handle the response:
   python3 -c "import json,pathlib; p=pathlib.Path('{config_path}'); d=json.loads(p.read_text()) if p.exists() else {{}}; d['enabled']=False; p.write_text(json.dumps(d,indent=2))"
 - If "Yes (10s)": continue to STEP 3.
 
-STEP 3: Create ONE multiple-choice question based on the diff below.
+STEP 3: Analyze the diff and create ONE multiple-choice question.
 
-QUESTION RULES (critical — this determines if the tool is useful or annoying):
-- Ask about BEHAVIOR and CONSEQUENCES, never syntax or trivia
-- The user should walk away understanding what their code change DOES in the real world
-- Frame questions from the perspective of a user/system interacting with the changed code
+First, figure out what ACTUALLY CHANGED in the product by reading the diff. Don't count lines — understand the intent:
+- Was a feature ADDED? (new capability that didn't exist before)
+- Was a feature CHANGED? (existing behavior now works differently)
+- Was something REMOVED? (capability or safeguard that's now gone)
+- Was it a FIX? (broken thing that now works)
 
-GOOD question patterns (use these):
-  * "After this change, what happens when [specific user action or edge case]?"
-  * "What problem does this change fix, and what was happening before?"
-  * "If [realistic scenario], what would this code do differently now?"
-  * "What could break if [this related component/input] behaves unexpectedly?"
-  * "A user reports [symptom]. Based on this change, what's the most likely cause?"
+Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this change on their product. Vibe coders build products — they need to understand what their product does, not how to read code.
 
-BAD question patterns (never use these):
-  * "What does [language keyword/syntax] mean?" — this is a textbook, not a quiz
-  * "What is the return type of [function]?" — irrelevant to understanding
-  * "Which design pattern is used here?" — academic, not practical
-  * "What library is being imported?" — trivially visible in the diff
+QUESTION FORMULA — pick one:
+  * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
+  * WHAT'S NEW: "A user tries [action] for the first time. What do they experience?"
+  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before — or what protection is no longer there?"
+  * SIDE EFFECTS: "This change also affects [related area]. What's different there now?"
+  * EDGE CASE: "A user does [unusual but realistic action]. How does your app handle it after this change?"
+  * LIMITS: "What's the maximum/minimum [value/count/size] this feature now supports? What happens at the boundary?"
+  * DATA: "After this change, what new data is being stored/sent/exposed? Who can see it?"
 
-WRONG ANSWERS must be plausible. Each wrong option should be something a developer who DIDN'T read the diff carefully might believe. Never use obviously absurd options.
+NEVER ASK:
+  * About code syntax, language features, or programming concepts
+  * About which library or framework is used
+  * Anything a developer would need to read code to answer — the question should be answerable by someone who understands the PRODUCT but not the code
+  * Generic questions unrelated to this specific diff
 
-Have exactly 4 options (use labels "A", "B", "C", "D"). One clearly correct.
+WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
 
-Ask it using AskUserQuestion with header: "VibeCheck" and multiSelect: false.
+Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
 
-STEP 4: After the user answers, respond with:
-1. The correct answer
-2. A clear explanation of WHY — connect it to the actual code change (reference specific lines/functions from the diff)
-3. If they got it wrong: why their choice was wrong and what part of the diff contradicts it
-4. One practical takeaway: a rule of thumb they can apply when reviewing similar code in the future
+STEP 4: After the user answers:
+1. Explain the correct answer in plain language — what the product does now and why
+2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
+3. One practical insight about their product they should remember (e.g., "your signup flow now skips email verification — make sure that's intentional before shipping to production")
 
 Then end your message with: [vibecheck:done]
 

@@ -48,9 +48,9 @@ That's it. Next time Claude finishes a coding task, you'll get a quiz.
 bash vibe-check/install/install.sh --global
 ```
 
-### Skill only (`/vibecheck` command, no auto-trigger)
+### Skill only (`/quiz` command, no auto-trigger)
 
-If you don't want automatic quizzes — just the on-demand `/vibecheck` slash command:
+If you don't want automatic quizzes — just the on-demand `/quiz` slash command:
 
 ```bash
 bash vibe-check/install/install.sh --skill-only
@@ -64,7 +64,7 @@ bash vibe-check/install/install.sh /path/to/your/project
 
 ### Manual setup
 
-1. **Skill only** — copy `templates/project/.claude/skills/vibecheck/` into your project's `.claude/skills/`
+1. **Skill only** — copy `templates/project/.claude/skills/quiz/` into your project's `.claude/skills/`
 2. **Auto-quiz** — additionally:
    - Build the binary: `cargo build --release`
    - Copy `target/release/vibecheck` to `.claude/hooks/vibecheck`
@@ -97,7 +97,7 @@ Works in both **Claude Code CLI** and the **VS Code extension** — they share t
 ### Auto-quiz (default)
 
 ```
-You: "Add form validation to the signup page"
+You: "Add rate limiting to the API"
 Claude: *writes code, finishes task*
 
   ┌─────────────────────────────────────────────────┐
@@ -109,28 +109,33 @@ Claude: *writes code, finishes task*
   │  ○ Disable                                      │
   └─────────────────────────────────────────────────┘
 
-  ┌─────────────────────────────────────────────────┐
-  │  After this change, what happens when a user    │
-  │  submits the form with an email that contains   │
-  │  no @ symbol?                                   │
-  │                                                 │
-  │  ○ A) The form submits and saves invalid data   │
-  │  ○ B) An inline error appears, form blocked     │
-  │  ○ C) The page crashes with unhandled error     │
-  │  ○ D) The email field is silently cleared       │
-  └─────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────┐
+  │  You just added rate limiting. When a user hits     │
+  │  the limit, what do they actually see?              │
+  │                                                     │
+  │  ○ A) A friendly "slow down" message with a         │
+  │       retry timer                                   │
+  │  ○ B) A raw "429 Too Many Requests" error with      │
+  │       no explanation                                │
+  │  ○ C) The page just hangs until the limit resets    │
+  │  ○ D) They get redirected to the homepage           │
+  └─────────────────────────────────────────────────────┘
 
-Claude: "Correct! B — the new validation regex rejects
-        emails without @, and the error state prevents
-        submission. Takeaway: always test validation with
-        the simplest invalid input first."
+Claude: "B — the rate limiter returns a 429 status code
+        with no custom message or retry-after header.
+        Your users will see a raw error.
+
+        If that's not the experience you want, you should
+        tell Claude to add a friendly error response with
+        a Retry-After header so the client knows when to
+        try again."
 ```
 
-Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) checks `git diff`, enforces throttling (1 quiz per 15min max, never the same diff twice), and if conditions pass, asks Claude to generate one behavioral MCQ.
+Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) checks `git diff`, figures out what feature was added/changed/removed, and asks one product comprehension question.
 
-### On-demand (`/vibecheck`)
+### On-demand (`/quiz`)
 
-Type `/vibecheck` anytime in Claude Code to quiz yourself on the current diff. No throttle, no conditions — just the quiz.
+Type `/quiz` anytime in Claude Code to quiz yourself on the current diff. No throttle, no conditions — just the quiz.
 
 ## Configure
 
@@ -146,7 +151,7 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `true` | Kill switch for auto-quiz (does not affect `/vibecheck`) |
+| `enabled` | `true` | Kill switch for auto-quiz (does not affect `/quiz`) |
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
 
