@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
 #[derive(Deserialize, Default)]
 struct HookPayload {
     hook_event_name: Option<String>,
@@ -61,14 +65,94 @@ struct BlockDecision {
     reason: String,
 }
 
+struct QuizContext {
+    raw_diff: String,
+    diff: String,
+    files: Vec<String>,
+    commit_msg: String,
+}
+
+struct DiffSummary {
+    lines_added: usize,
+    lines_removed: usize,
+    functions_added: Vec<String>,
+    functions_removed: Vec<String>,
+    has_error_handling_changes: bool,
+    has_security_changes: bool,
+    has_api_changes: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Entry point - CLI routing
+// ---------------------------------------------------------------------------
+
 fn main() {
-    if run().is_err() {
-        // Any error → exit 0 (allow stop, never crash)
-        std::process::exit(0);
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() <= 1 {
+        // No args: Claude Code Stop hook mode (reads stdin)
+        if run_hook().is_err() {
+            std::process::exit(0);
+        }
+        return;
+    }
+
+    let result = match args[1].as_str() {
+        "--help" | "-h" | "help" => {
+            print_help();
+            Ok(())
+        }
+        "--version" | "-V" | "version" => {
+            print_version();
+            Ok(())
+        }
+        "init" => init_git_hook(),
+        "remove" => remove_git_hook(),
+        "quiz" => run_quiz(&args[2..]),
+        other => {
+            eprintln!("unknown command: {}", other);
+            eprintln!("run 'vibecheck --help' for usage");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = result {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+fn print_help() {
+    println!("vibecheck {}", env!("CARGO_PKG_VERSION"));
+    println!("Reality checks for vibe coders. One question per diff.\n");
+    println!("USAGE:");
+    println!("  vibecheck              Claude Code Stop hook (reads stdin)");
+    println!("  vibecheck quiz         Quiz from uncommitted changes");
+    println!("  vibecheck quiz --commit  Quiz from latest commit");
+    println!("  vibecheck init         Install git post-commit hook");
+    println!("  vibecheck remove       Remove git post-commit hook");
+    println!("  vibecheck --help       Show this help");
+    println!("  vibecheck --version    Show version\n");
+    println!("EXAMPLES:");
+    println!("  vibecheck quiz | pbcopy     Copy quiz to clipboard");
+    println!("  vibecheck quiz | llm        Pipe to any LLM CLI");
+    println!("  vibecheck init              Auto-quiz after every commit\n");
+    println!("WORKS WITH:");
+    println!("  Claude Code, Cursor, Windsurf, OpenClaw, PicoClaw,");
+    println!("  NanoClaw, Cline, Aider, or any AI tool that reads text.\n");
+    println!("CONFIG: .claude/vibecheck.json or ~/.claude/vibecheck.json");
+    println!("DOCS:   https://github.com/akshan-main/vibe-check");
+}
+
+fn print_version() {
+    println!("vibecheck {}", env!("CARGO_PKG_VERSION"));
+}
+
+// ---------------------------------------------------------------------------
+// Mode 1: Claude Code Stop hook (existing behavior)
+// ---------------------------------------------------------------------------
+
+fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
     // Read stdin
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -130,26 +214,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Get diff content - skip if empty (e.g. only untracked files, no modifications)
-    let diff_all = get_full_diff(&project_dir);
-    if diff_all.trim().is_empty() {
+    // Collect context using parallel git operations
+    let max_chars = config.max_diff_chars.unwrap_or(2000);
+    let ctx = collect_working_context(&project_dir, max_chars)?;
+
+    if ctx.raw_diff.trim().is_empty() {
         return Ok(());
     }
 
     // Throttle: check if diff changed
-    let diff_hash = hash_string(&diff_all);
+    let diff_hash = hash_string(&ctx.raw_diff);
     if diff_hash == state.last_diff_hash {
         return Ok(());
     }
 
-    // Collect context for the quiz
-    let file_list = get_changed_files(&project_dir);
-    let max_chars = config.max_diff_chars.unwrap_or(2000);
-    let truncated_diff = truncate_diff(&diff_all, max_chars);
-    let files_line = if file_list.is_empty() {
+    let files_line = if ctx.files.is_empty() {
         "(unknown files)".to_string()
     } else {
-        file_list.join(", ")
+        ctx.files.join(", ")
     };
 
     // Update state before outputting (so if Claude crashes, we don't re-quiz)
@@ -175,7 +257,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path_str = config_path.to_string_lossy().to_string();
     let reason = build_reason(
         &files_line,
-        &truncated_diff,
+        &ctx.diff,
         &state_path_str,
         &config_path_str,
         &user_prompt,
@@ -192,6 +274,409 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", serde_json::to_string(&decision)?);
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Mode 2: Standalone quiz (works with any editor/AI tool)
+// ---------------------------------------------------------------------------
+
+fn run_quiz(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = find_git_root()?;
+    let config = load_config(&project_dir);
+    let max_chars = config.max_diff_chars.unwrap_or(2000);
+    let use_commit = args.iter().any(|a| a == "--commit");
+
+    let ctx = if use_commit {
+        collect_commit_context(&project_dir, max_chars)?
+    } else {
+        collect_working_context(&project_dir, max_chars)?
+    };
+
+    if ctx.raw_diff.trim().is_empty() {
+        eprintln!("no changes to quiz on");
+        return Ok(());
+    }
+
+    let summary = analyze_diff(&ctx.raw_diff);
+    output_quiz_context(&ctx, &summary, &config);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Mode 3: Git hook management
+// ---------------------------------------------------------------------------
+
+fn init_git_hook() -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = find_git_root()?;
+    let hooks_dir = project_dir.join(".git").join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+    let hook_path = hooks_dir.join("post-commit");
+
+    let marker = "# vibecheck";
+    let hook_cmd = "vibecheck quiz --commit 2>/dev/null || true";
+    let block = format!("\n{}\n{}\n", marker, hook_cmd);
+
+    if hook_path.exists() {
+        let content = fs::read_to_string(&hook_path)?;
+        if content.contains(marker) {
+            println!("vibecheck hook already installed in .git/hooks/post-commit");
+            return Ok(());
+        }
+        // Append to existing hook
+        let mut f = fs::OpenOptions::new().append(true).open(&hook_path)?;
+        use std::io::Write;
+        write!(f, "{}", block)?;
+    } else {
+        fs::write(&hook_path, format!("#!/bin/sh\n{}", block))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
+    }
+
+    println!("Installed post-commit hook.");
+    println!("VibeCheck will print quiz context after every commit.");
+    println!("Works with any AI tool - pipe it, paste it, or let your tool read it.");
+    println!("\nRemove with: vibecheck remove");
+
+    Ok(())
+}
+
+fn remove_git_hook() -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = find_git_root()?;
+    let hook_path = project_dir.join(".git").join("hooks").join("post-commit");
+
+    if !hook_path.exists() {
+        println!("no post-commit hook found");
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&hook_path)?;
+    let marker = "# vibecheck";
+
+    if !content.contains(marker) {
+        println!("vibecheck not found in post-commit hook");
+        return Ok(());
+    }
+
+    // Remove the vibecheck block (marker line + command line)
+    let lines: Vec<&str> = content.lines().collect();
+    let mut new_lines = Vec::new();
+    let mut skip_next = false;
+    for line in &lines {
+        if line.trim() == marker {
+            skip_next = true;
+            continue;
+        }
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        new_lines.push(*line);
+    }
+
+    let new_content = new_lines.join("\n");
+
+    // If only shebang left (or empty), remove the file entirely
+    if new_content.trim().is_empty() || new_content.trim() == "#!/bin/sh" {
+        fs::remove_file(&hook_path)?;
+        println!("Removed post-commit hook.");
+    } else {
+        fs::write(&hook_path, new_content)?;
+        println!("Removed vibecheck from post-commit hook.");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Parallel context collection (leverages Rust's zero-cost threads)
+// ---------------------------------------------------------------------------
+
+fn collect_working_context(
+    dir: &Path,
+    max_chars: usize,
+) -> Result<QuizContext, Box<dyn std::error::Error>> {
+    use std::thread;
+
+    let d1 = dir.to_path_buf();
+    let d2 = dir.to_path_buf();
+    let d3 = dir.to_path_buf();
+    let d4 = dir.to_path_buf();
+
+    // Spawn 4 git commands concurrently on native OS threads
+    let h1 = thread::spawn(move || {
+        git_cmd_with_timeout(&d1, &["diff", "--unified=3"], 3).unwrap_or_default()
+    });
+    let h2 = thread::spawn(move || {
+        git_cmd_with_timeout(&d2, &["diff", "--staged", "--unified=3"], 3).unwrap_or_default()
+    });
+    let h3 = thread::spawn(move || {
+        git_cmd_with_timeout(&d3, &["diff", "--name-only"], 3).unwrap_or_default()
+    });
+    let h4 = thread::spawn(move || {
+        git_cmd_with_timeout(&d4, &["diff", "--staged", "--name-only"], 3).unwrap_or_default()
+    });
+
+    let unstaged_diff = h1.join().map_err(|_| "thread panic")?;
+    let staged_diff = h2.join().map_err(|_| "thread panic")?;
+    let unstaged_files = h3.join().map_err(|_| "thread panic")?;
+    let staged_files = h4.join().map_err(|_| "thread panic")?;
+
+    let raw_diff = format!("{}{}", unstaged_diff, staged_diff);
+    let files = dedup_file_list(&unstaged_files, &staged_files);
+
+    Ok(QuizContext {
+        diff: truncate_diff(&raw_diff, max_chars),
+        raw_diff,
+        files,
+        commit_msg: String::new(),
+    })
+}
+
+fn collect_commit_context(
+    dir: &Path,
+    max_chars: usize,
+) -> Result<QuizContext, Box<dyn std::error::Error>> {
+    use std::thread;
+
+    let d1 = dir.to_path_buf();
+    let d2 = dir.to_path_buf();
+    let d3 = dir.to_path_buf();
+
+    // 3 parallel git commands for committed changes
+    let h1 = thread::spawn(move || {
+        git_cmd_with_timeout(&d1, &["diff", "HEAD~1", "--unified=3"], 3).unwrap_or_default()
+    });
+    let h2 = thread::spawn(move || {
+        git_cmd_with_timeout(&d2, &["diff", "HEAD~1", "--name-only"], 3).unwrap_or_default()
+    });
+    let h3 = thread::spawn(move || {
+        git_cmd_with_timeout(&d3, &["log", "-1", "--pretty=%s"], 3).unwrap_or_default()
+    });
+
+    let raw_diff = h1.join().map_err(|_| "thread panic")?;
+    let files_raw = h2.join().map_err(|_| "thread panic")?;
+    let commit_msg = h3.join().map_err(|_| "thread panic")?;
+
+    let files: Vec<String> = files_raw
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(10)
+        .collect();
+
+    Ok(QuizContext {
+        diff: truncate_diff(&raw_diff, max_chars),
+        raw_diff,
+        files,
+        commit_msg,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Diff analysis (Rust-native pattern detection on raw diff text)
+// ---------------------------------------------------------------------------
+
+fn analyze_diff(diff: &str) -> DiffSummary {
+    let mut summary = DiffSummary {
+        lines_added: 0,
+        lines_removed: 0,
+        functions_added: Vec::new(),
+        functions_removed: Vec::new(),
+        has_error_handling_changes: false,
+        has_security_changes: false,
+        has_api_changes: false,
+    };
+
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            summary.lines_added += 1;
+            let content = &line[1..];
+
+            if let Some(name) = extract_function_name(content) {
+                summary.functions_added.push(name);
+            }
+
+            check_patterns(content, &mut summary);
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            summary.lines_removed += 1;
+            let content = &line[1..];
+
+            if let Some(name) = extract_function_name(content) {
+                summary.functions_removed.push(name);
+            }
+
+            check_patterns(content, &mut summary);
+        }
+    }
+
+    summary
+}
+
+fn check_patterns(content: &str, summary: &mut DiffSummary) {
+    let lower = content.to_lowercase();
+    if lower.contains("error")
+        || lower.contains("catch")
+        || lower.contains("except")
+        || lower.contains("panic")
+        || lower.contains("unwrap")
+    {
+        summary.has_error_handling_changes = true;
+    }
+    if lower.contains("auth")
+        || lower.contains("token")
+        || lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("csrf")
+        || lower.contains("cors")
+        || lower.contains("permission")
+    {
+        summary.has_security_changes = true;
+    }
+    if lower.contains("route")
+        || lower.contains("endpoint")
+        || lower.contains("/api")
+        || lower.contains("handler")
+        || lower.contains("middleware")
+    {
+        summary.has_api_changes = true;
+    }
+}
+
+fn extract_function_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+
+    // Language-agnostic function detection
+    let patterns: &[(&str, &str)] = &[
+        ("fn ", "("),       // Rust
+        ("def ", "("),      // Python, Ruby
+        ("function ", "("), // JavaScript
+        ("func ", "("),     // Go
+        ("sub ", "("),      // Perl
+    ];
+
+    for &(prefix, suffix) in patterns {
+        if let Some(start) = trimmed.find(prefix) {
+            let after = &trimmed[start + prefix.len()..];
+            if let Some(end) = after.find(suffix) {
+                let name = after[..end].trim();
+                if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+
+    // JS arrow functions: const name = (...) =>
+    if trimmed.contains("=>") {
+        if let Some(eq_pos) = trimmed.find('=') {
+            let before = trimmed[..eq_pos].trim();
+            // Extract last word before =
+            if let Some(name) = before.split_whitespace().last() {
+                if name.chars().all(|c| c.is_alphanumeric() || c == '_') && name.len() > 1 {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Quiz output (structured context for any AI tool)
+// ---------------------------------------------------------------------------
+
+fn output_quiz_context(ctx: &QuizContext, summary: &DiffSummary, config: &Config) {
+    let difficulty = config.difficulty.as_deref().unwrap_or("normal");
+
+    println!("# VibeCheck\n");
+
+    if !ctx.commit_msg.is_empty() {
+        println!("Commit: {}\n", ctx.commit_msg.trim());
+    }
+
+    if !ctx.files.is_empty() {
+        println!("Changed files: {}\n", ctx.files.join(", "));
+    }
+
+    // Structured summary from diff analysis
+    let mut notes = Vec::new();
+    if !summary.functions_added.is_empty() {
+        if summary.functions_added.len() <= 3 {
+            notes.push(format!("New: {}", summary.functions_added.join(", ")));
+        } else {
+            notes.push(format!("{} functions added", summary.functions_added.len()));
+        }
+    }
+    if !summary.functions_removed.is_empty() {
+        if summary.functions_removed.len() <= 3 {
+            notes.push(format!("Removed: {}", summary.functions_removed.join(", ")));
+        } else {
+            notes.push(format!(
+                "{} functions removed",
+                summary.functions_removed.len()
+            ));
+        }
+    }
+    if summary.has_error_handling_changes {
+        notes.push("Error handling changed".to_string());
+    }
+    if summary.has_security_changes {
+        notes.push("Security-related changes".to_string());
+    }
+    if summary.has_api_changes {
+        notes.push("API/routing changes".to_string());
+    }
+    notes.push(format!(
+        "+{} -{} lines",
+        summary.lines_added, summary.lines_removed
+    ));
+
+    println!("Summary:");
+    for note in &notes {
+        println!("  - {}", note);
+    }
+    println!();
+
+    println!("```diff");
+    println!("{}", ctx.diff);
+    println!("```\n");
+
+    let difficulty_note = match difficulty {
+        "beginner" => {
+            "Ask about the most obvious, surface-level change the user would notice."
+        }
+        "advanced" => "Ask about edge cases, security implications, or subtle behavior changes.",
+        _ => "Ask about the most important change and its real-world impact on users.",
+    };
+
+    println!("## Quiz Instructions\n");
+    println!("Create ONE multiple-choice question (A/B/C/D) about this diff.");
+    println!("{}", difficulty_note);
+    println!("Test whether the developer knows what their PRODUCT does now,");
+    println!("not how the code works. The question should be answerable by");
+    println!("someone who understands the product but hasn't read the code.\n");
+
+    println!("---\n");
+    println!("Pipe this to your AI tool:");
+    println!("  vibecheck quiz | pbcopy        # copy to clipboard");
+    println!("  vibecheck quiz | llm           # pipe to LLM CLI");
+    println!("  vibecheck quiz > .quiz.md      # save for your AI to read");
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn find_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = env::current_dir()?;
+    let output = git_cmd(&dir, &["rev-parse", "--show-toplevel"])?;
+    Ok(PathBuf::from(output.trim()))
 }
 
 fn resolve_project_dir(payload: &HookPayload) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -285,18 +770,7 @@ fn git_cmd_with_timeout(dir: &Path, args: &[&str], timeout_secs: u64) -> Option<
     }
 }
 
-fn get_full_diff(dir: &Path) -> String {
-    let unstaged = git_cmd_with_timeout(dir, &["diff", "--unified=3"], 3).unwrap_or_default();
-    let staged =
-        git_cmd_with_timeout(dir, &["diff", "--staged", "--unified=3"], 3).unwrap_or_default();
-    format!("{}{}", unstaged, staged)
-}
-
-fn get_changed_files(dir: &Path) -> Vec<String> {
-    let unstaged = git_cmd_with_timeout(dir, &["diff", "--name-only"], 3).unwrap_or_default();
-    let staged =
-        git_cmd_with_timeout(dir, &["diff", "--staged", "--name-only"], 3).unwrap_or_default();
-
+fn dedup_file_list(unstaged: &str, staged: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut files = Vec::new();
 
@@ -506,6 +980,10 @@ Diff:
         tracking_section = tracking_section
     )
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -736,5 +1214,149 @@ mod tests {
         let payload: HookPayload = serde_json::from_str(json).unwrap();
         assert_eq!(payload.hook_event_name.as_deref(), Some("Stop"));
         assert_eq!(payload.transcript_path.as_deref(), Some("/tmp/test.jsonl"));
+    }
+
+    // --- New tests for standalone features ---
+
+    #[test]
+    fn extract_function_name_rust() {
+        assert_eq!(
+            extract_function_name("  fn process_payment(amount: f64) {"),
+            Some("process_payment".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_function_name_python() {
+        assert_eq!(
+            extract_function_name("  def handle_request(self, req):"),
+            Some("handle_request".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_function_name_javascript() {
+        assert_eq!(
+            extract_function_name("function validateInput(data) {"),
+            Some("validateInput".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_function_name_go() {
+        assert_eq!(
+            extract_function_name("func ServeHTTP(w http.ResponseWriter, r *http.Request) {"),
+            Some("ServeHTTP".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_function_name_arrow() {
+        assert_eq!(
+            extract_function_name("const fetchUsers = (page) => {"),
+            Some("fetchUsers".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_function_name_not_a_function() {
+        assert_eq!(extract_function_name("  let x = 42;"), None);
+    }
+
+    #[test]
+    fn analyze_diff_counts_lines() {
+        let diff = "+added line 1\n+added line 2\n-removed line\n unchanged\n";
+        let summary = analyze_diff(diff);
+        assert_eq!(summary.lines_added, 2);
+        assert_eq!(summary.lines_removed, 1);
+    }
+
+    #[test]
+    fn analyze_diff_detects_functions() {
+        let diff = "+fn new_feature(x: i32) {\n+  x + 1\n+}\n-fn old_feature() {\n";
+        let summary = analyze_diff(diff);
+        assert_eq!(summary.functions_added, vec!["new_feature"]);
+        assert_eq!(summary.functions_removed, vec!["old_feature"]);
+    }
+
+    #[test]
+    fn analyze_diff_detects_patterns() {
+        let diff = "+  if auth_token.is_empty() {\n+    return Err(AuthError::Unauthorized);\n+  }\n";
+        let summary = analyze_diff(diff);
+        assert!(summary.has_security_changes);
+        assert!(summary.has_error_handling_changes);
+    }
+
+    #[test]
+    fn analyze_diff_detects_api_changes() {
+        let diff = "+router.get('/api/users', handler)\n";
+        let summary = analyze_diff(diff);
+        assert!(summary.has_api_changes);
+    }
+
+    #[test]
+    fn analyze_diff_ignores_diff_headers() {
+        let diff = "+++ b/src/main.rs\n--- a/src/main.rs\n+real line\n-real removed\n";
+        let summary = analyze_diff(diff);
+        assert_eq!(summary.lines_added, 1);
+        assert_eq!(summary.lines_removed, 1);
+    }
+
+    #[test]
+    fn dedup_file_list_merges() {
+        let unstaged = "src/a.rs\nsrc/b.rs\n";
+        let staged = "src/b.rs\nsrc/c.rs\n";
+        let files = dedup_file_list(unstaged, staged);
+        assert_eq!(files, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+    }
+
+    #[test]
+    fn dedup_file_list_caps_at_10() {
+        let many = (0..20).map(|i| format!("file{}.rs", i)).collect::<Vec<_>>();
+        let input = many.join("\n");
+        let files = dedup_file_list(&input, "");
+        assert_eq!(files.len(), 10);
+    }
+
+    #[test]
+    fn init_and_remove_git_hook() {
+        let dir = std::env::temp_dir().join("vibecheck_hook_test");
+        let git_dir = dir.join(".git").join("hooks");
+        let _ = fs::create_dir_all(&git_dir);
+        let hook_path = git_dir.join("post-commit");
+
+        // Write a hook file as if init was called
+        let marker = "# vibecheck";
+        let content = format!("#!/bin/sh\n\n{}\nvibecheck quiz --commit 2>/dev/null || true\n", marker);
+        fs::write(&hook_path, &content).unwrap();
+
+        // Verify it exists
+        let read = fs::read_to_string(&hook_path).unwrap();
+        assert!(read.contains(marker));
+
+        // Simulate remove
+        let lines: Vec<&str> = read.lines().collect();
+        let mut new_lines = Vec::new();
+        let mut skip_next = false;
+        for line in &lines {
+            if line.trim() == marker {
+                skip_next = true;
+                continue;
+            }
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            new_lines.push(*line);
+        }
+        let new_content = new_lines.join("\n");
+        if new_content.trim().is_empty() || new_content.trim() == "#!/bin/sh" {
+            fs::remove_file(&hook_path).unwrap();
+        }
+
+        assert!(!hook_path.exists());
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
     }
 }
