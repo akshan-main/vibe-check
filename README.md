@@ -33,65 +33,86 @@ The main goal of this is, it improves your prompting skills, you can incorporate
 
 ## Install
 
+Pick what works for you. All three methods give you the same result.
+
+### Option A: Install script
+
 ```bash
 git clone https://github.com/akshan-main/vibe-check.git
 bash vibe-check/install/install.sh      # install in current project
 ```
 
-That's it. Next time Claude finishes a coding task, you'll get a quiz.
+The script is [~100 lines of bash](install/install.sh) — it copies a binary, a config file, and merges one entry into your `settings.json`. You can read the whole thing in 2 minutes.
 
 <details>
-<summary><strong>More install options</strong></summary>
+<summary>More script options</summary>
 
-### Global install (all projects)
+```bash
+bash vibe-check/install/install.sh --global          # all projects
+bash vibe-check/install/install.sh --skill-only      # only /quiz, no auto-trigger
+bash vibe-check/install/install.sh /path/to/project  # specific project
+```
+
+</details>
+
+### Option B: Manual setup (no script)
+
+**For just the `/quiz` command** (on-demand only):
+
+Copy the skill folder into your project:
+```bash
+git clone https://github.com/akshan-main/vibe-check.git
+cp -r vibe-check/templates/project/.claude/skills/quiz .claude/skills/quiz
+```
+
+Done. Type `/quiz` in Claude Code anytime.
+
+**For auto-quiz after every task**, additionally:
+
+1. Build or download the binary:
+   ```bash
+   cd vibe-check && cargo build --release
+   ```
+
+2. Copy the binary and config into your project:
+   ```bash
+   mkdir -p .claude/hooks
+   cp vibe-check/target/release/vibecheck .claude/hooks/vibecheck
+   cp vibe-check/templates/project/.claude/vibecheck.json .claude/vibecheck.json
+   ```
+
+3. Add the Stop hook to `.claude/settings.json` (create the file if it doesn't exist):
+   ```json
+   {
+     "hooks": {
+       "Stop": [
+         {
+           "hooks": [
+             {
+               "type": "command",
+               "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/vibecheck",
+               "timeout": 5
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   If you already have a `settings.json`, just add the Stop hook entry alongside your existing config.
+
+### Option C: Global install (all projects)
 
 ```bash
 bash vibe-check/install/install.sh --global
 ```
 
-### Skill only (`/quiz` command, no auto-trigger)
+Or manually: follow Option B but place everything under `~/.claude/` instead of `.claude/`, and use `$HOME/.claude/hooks/vibecheck` as the hook command.
 
-If you don't want automatic quizzes, just the on-demand `/quiz` slash command:
+---
 
-```bash
-bash vibe-check/install/install.sh --skill-only
-```
-
-### Specific project
-
-```bash
-bash vibe-check/install/install.sh /path/to/your/project
-```
-
-### Manual setup
-
-1. **Skill only** — copy `templates/project/.claude/skills/quiz/` into your project's `.claude/skills/`
-2. **Auto-quiz** — additionally:
-   - Build the binary: `cargo build --release`
-   - Copy `target/release/vibecheck` to `.claude/hooks/vibecheck`
-   - Copy `templates/project/.claude/vibecheck.json` to `.claude/vibecheck.json`
-   - Add the Stop hook to `.claude/settings.json`:
-     ```json
-     {
-       "hooks": {
-         "Stop": [
-           {
-             "hooks": [
-               {
-                 "type": "command",
-                 "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/vibecheck",
-                 "timeout": 5
-               }
-             ]
-           }
-         ]
-       }
-     }
-     ```
-
-</details>
-
-Works in both **Claude Code CLI** and the **VS Code extension** since they share the same settings files.
+Works in both **Claude Code CLI** and the **VS Code extension** — they share the same settings files.
 
 ## How It Works
 
