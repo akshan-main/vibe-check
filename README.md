@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">VibeCheck</h1>
   <p align="center">
-    <strong>Do you actually understand what you just shipped?</strong>
+    <strong>Become a better prompter, one diff at a time.</strong>
   </p>
   <p align="center">
     One question. Based on your exact diff. 10 seconds. Always skippable.
@@ -16,14 +16,15 @@
 
 ---
 
-More and more people are vibe-coding, letting coding agents like Claude Code write the code while they direct it. That's cool. But it has a gap: **you "might" ship code you don't understand**.
+Every time Claude Code finishes a task, VibeCheck asks you **one** quick question about what just changed in your product — and then tells you **how to prompt better next time**.
 
-VibeCheck helps narrow that gap. After Claude finishes a task that changed code, it asks you **one** multiple-choice question about what actually changed. Not a syntax quiz. Not a lecture. A behavioral question: *"What happens when a user does X after this change?"*
+You prompted *"Add rate limiting."* Claude built it. But did it return a friendly error or a raw 429? Is there a Retry-After header? VibeCheck surfaces exactly these gaps — then suggests a better prompt: *"Next time, try: 'Add rate limiting AND return a friendly error with a Retry-After header.'"*
 
-The main goal of this is, it improves your prompting skills, you can incorporate what it asks next time you prompt for the feature since you have a better understanding of what a llm expects.
+Over time, your prompts get more complete. Fewer surprises. Better products.
 
-- **Diff-grounded** - every question is about the exact code that just changed
-- **Behavior-focused** - tests understanding of *what the change does*, not language trivia
+- **Improves your prompting** - every question ends with a concrete prompting tip you can use next time
+- **Product-focused** - asks what your *app does*, not how the code works
+- **AI-picked** - uses Claude's understanding of your code to find the most important change, not the biggest diff
 - **10 seconds** - one click to answer, brief explanation, done
 - **Always skippable** - Yes / No / Snooze 30m / Disable
 - **Zero storage** - no scores, no telemetry, no answers saved to disk
@@ -147,10 +148,10 @@ Claude: "B — the rate limiter returns a 429 status code
         with no custom message or retry-after header.
         Your users will see a raw error.
 
-        If that's not the experience you want, you should
-        tell Claude to add a friendly error response with
-        a Retry-After header so the client knows when to
-        try again."
+        Prompting tip: Next time, try: 'Add rate limiting
+        AND return a friendly error message with a
+        Retry-After header when the limit is hit.' This
+        way Claude handles the UX in the same pass."
 ```
 
 Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) checks `git diff`, figures out what feature was added/changed/removed, and asks one product comprehension question.
@@ -186,6 +187,18 @@ bash vibe-check/install/install.sh --global --uninstall
 ```
 
 ## FAQ
+
+<details>
+<summary><strong>Can't I just ask Claude about my code?</strong></summary>
+
+You can. You won't. VibeCheck is proactive — it catches gaps you didn't know to ask about. More importantly, it gives you a prompting tip so your *next* prompt is better. Asking Claude "what did you just do?" teaches you about this change. VibeCheck teaches you how to prompt so the next change doesn't have the same gaps.
+</details>
+
+<details>
+<summary><strong>How is this different from Claude's learning mode?</strong></summary>
+
+Learning mode explains *how the code works* while Claude writes it. VibeCheck does something different: it checks if you understand what your *product does* after the change, and gives you a better prompt for next time. "What does the user see when they hit the rate limit?" vs "here's how the middleware pipeline works."
+</details>
 
 <details>
 <summary><strong>Will it loop forever?</strong></summary>
