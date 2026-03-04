@@ -1,7 +1,6 @@
 ---
 name: quiz
 description: On-demand product comprehension quiz about your current code changes
-disable-model-invocation: true
 ---
 
 Run a VibeCheck quiz right now based on the current git diff.
@@ -44,7 +43,7 @@ Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskU
 STEP 3: After the user answers:
 1. Explain the correct answer in plain language — what the product does now and why
 2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. One practical insight about their product they should remember
+3. A PROMPTING TIP: suggest how they could have prompted Claude differently to get a better result or avoid the gap this question exposed. For example: "Next time, try: 'Add rate limiting AND return a friendly error message with a Retry-After header when the limit is hit.'" This helps them write more complete prompts in the future.
 
 End your message with: [vibecheck:done]
 

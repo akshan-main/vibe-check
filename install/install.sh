@@ -32,14 +32,14 @@ Arguments:
 
 Options:
   --global      Install to ~/.claude/ (applies to all projects)
-  --skill-only  Only install the /vibecheck slash command (no auto-trigger hook)
+  --skill-only  Only install the /quiz slash command (no auto-trigger hook)
   --uninstall   Remove VibeCheck
   --help        Show this help message
 
 Examples:
   bash install.sh                     # Install everything in current project
   bash install.sh /path/to/project    # Install in specific project
-  bash install.sh --skill-only        # Only the /vibecheck command, no auto-quiz
+  bash install.sh --skill-only        # Only the /quiz command, no auto-quiz
   bash install.sh --global            # Install globally
   bash install.sh --uninstall         # Uninstall from current project
 EOF
@@ -327,7 +327,7 @@ do_install() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    # Always install the /vibecheck skill (on-demand command)
+    # Always install the /quiz skill (on-demand command)
     local skill_dir="$CLAUDE_DIR/skills/quiz"
     local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
     mkdir -p "$skill_dir"

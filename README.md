@@ -16,16 +16,17 @@
 
 ---
 
-More and more people are vibe-coding — letting Claude write the code while they direct the vision. That's powerful. But it has a gap: **you can ship code you don't understand**.
+More and more people are vibe-coding, letting coding agents like Claude Code write the code while they direct it. That's cool. But it has a gap: **you "might" ship code you don't understand**.
 
-VibeCheck closes that gap. After Claude finishes a task that changed code, it asks you **one** multiple-choice question about what actually changed. Not a syntax quiz. Not a lecture. A behavioral question: *"What happens when a user does X after this change?"*
+VibeCheck helps narrow that gap. After Claude finishes a task that changed code, it asks you **one** multiple-choice question about what actually changed. Not a syntax quiz. Not a lecture. A behavioral question: *"What happens when a user does X after this change?"*
 
-- **Diff-grounded** — every question is about the exact code that just changed
-- **Behavior-focused** — tests understanding of *what the change does*, not language trivia
-- **10 seconds** — one click to answer, brief explanation, done
-- **Always skippable** — Yes / No / Snooze 30m / Disable
-- **Zero storage** — no scores, no telemetry, no answers saved to disk
-- **Works everywhere** — Claude Code CLI + VS Code extension
+The main goal of this is, it improves your prompting skills, you can incorporate what it asks next time you prompt for the feature since you have a better understanding of what a llm expects.
+
+- **Diff-grounded** - every question is about the exact code that just changed
+- **Behavior-focused** - tests understanding of *what the change does*, not language trivia
+- **10 seconds** - one click to answer, brief explanation, done
+- **Always skippable** - Yes / No / Snooze 30m / Disable
+- **Zero storage** - no scores, no telemetry, no answers saved to disk
 
 <!-- TODO: Add demo GIF here showing the quiz flow -->
 <!-- ![VibeCheck demo](assets/demo.gif) -->
@@ -50,7 +51,7 @@ bash vibe-check/install/install.sh --global
 
 ### Skill only (`/quiz` command, no auto-trigger)
 
-If you don't want automatic quizzes — just the on-demand `/quiz` slash command:
+If you don't want automatic quizzes, just the on-demand `/quiz` slash command:
 
 ```bash
 bash vibe-check/install/install.sh --skill-only
@@ -90,7 +91,7 @@ bash vibe-check/install/install.sh /path/to/your/project
 
 </details>
 
-Works in both **Claude Code CLI** and the **VS Code extension** — they share the same settings files.
+Works in both **Claude Code CLI** and the **VS Code extension** since they share the same settings files.
 
 ## How It Works
 
@@ -218,6 +219,3 @@ cargo build --release
 
 PRs welcome. Keep it simple — the core product is one question, one diff, 10 seconds.
 
-## License
-
-MIT
