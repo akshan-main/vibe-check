@@ -70,7 +70,7 @@ You: "Add rate limiting to the API"
 Claude: *writes code, finishes task*
 
   ┌─────────────────────────────────────────────────┐
-  │  VibeCheck: quick 10-second check?              │
+  │  VibeCheck: quick check on what just changed?    │
   │                                                 │
   │  ○ Yes (10s)                                    │
   │  ○ No thanks                                    │
@@ -148,6 +148,45 @@ vibecheck remove    # uninstall the hook
 
 VibeCheck is a single static binary. No Python, no Node, no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
 
+## Team Mode
+
+Track your team's product understanding with a shared leaderboard. No server needed - stats sync through git.
+
+```bash
+# One person sets it up
+vibecheck team init --name "Your Team"
+
+# Each team member joins
+vibecheck team join
+
+# View the leaderboard anytime
+vibecheck team
+```
+
+```
+Your Team
+============================================
+
+ #   Name           Score   Streak   This Week
+ -----------------------------------------------
+ 1   Milan           80%        5         4/5
+ 2   Sara            75%        2         3/4
+ 3   Mike            60%        0         2/3
+ -----------------------------------------------
+ Team average: 72%  |  12 quizzes this week
+```
+
+How it works:
+- Stats stored as JSON files in `.vibecheck-team/` at your project root
+- Each member identified by a hash of their git email (privacy-friendly)
+- Commit the directory to git so the team can see each other's progress
+- Weekly stats reset automatically
+- When team mode is active and `trackProgress` is enabled, the quiz automatically updates both personal and team stats
+
+```bash
+vibecheck team reset    # reset your own stats
+```
+
 ## Configure
 
 Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for global):
@@ -168,7 +207,7 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
 | `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
-| `trackProgress` | `false` | Set to `true` to track your quiz stats locally (total, correct, streak) |
+| `trackProgress` | `false` | Set to `true` to track quiz stats locally and on the team leaderboard |
 
 ## Uninstall
 
@@ -253,4 +292,4 @@ Test it:
 
 ## Contributing
 
-PRs welcome. Keep it simple. One question, one diff, 10 seconds.
+PRs welcome. Keep it simple. One question, one diff, skip anytime.
