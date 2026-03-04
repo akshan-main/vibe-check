@@ -823,7 +823,11 @@ fn extract_user_prompt(transcript_path: Option<&str>) -> String {
         Err(_) => return String::new(),
     };
 
-    // JSONL format: each line is a JSON object. Find the first user message.
+    // Use the LAST user message - it's the most recent instruction and most
+    // likely to relate to the current diff. Earlier messages might be about
+    // completely different tasks in the same session.
+    let mut last_user_message = String::new();
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -831,29 +835,39 @@ fn extract_user_prompt(transcript_path: Option<&str>) -> String {
         }
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
             if val.get("role").and_then(|r| r.as_str()) == Some("user") {
-                // Extract text content
-                if let Some(content) = val.get("content") {
-                    if let Some(text) = content.as_str() {
-                        let truncated: String = text.chars().take(500).collect();
-                        return truncated;
-                    }
-                    // content might be an array of blocks
-                    if let Some(arr) = content.as_array() {
-                        for block in arr {
-                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                    let truncated: String = text.chars().take(500).collect();
-                                    return truncated;
-                                }
-                            }
-                        }
+                if let Some(text) = extract_text_from_content(val.get("content")) {
+                    if !text.is_empty() {
+                        last_user_message = text;
                     }
                 }
             }
         }
     }
 
-    String::new()
+    // Truncate to 500 chars
+    last_user_message.chars().take(500).collect()
+}
+
+fn extract_text_from_content(content: Option<&serde_json::Value>) -> Option<String> {
+    let content = content?;
+
+    // String content
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+
+    // Array of content blocks
+    if let Some(arr) = content.as_array() {
+        for block in arr {
+            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                    return Some(text.to_string());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn load_state(path: &Path) -> State {
@@ -1129,6 +1143,35 @@ mod tests {
 
         let result = extract_user_prompt(Some(path.to_str().unwrap()));
         assert_eq!(result.len(), 500);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_user_prompt_takes_last_message() {
+        let path = std::env::temp_dir().join("vibecheck_test_transcript4.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"Set up the project"}}"#).unwrap();
+        writeln!(f, r#"{{"role":"assistant","content":"Done."}}"#).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"Add rate limiting"}}"#).unwrap();
+        writeln!(f, r#"{{"role":"assistant","content":"Working on it..."}}"#).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"yes do it"}}"#).unwrap();
+        drop(f);
+
+        let result = extract_user_prompt(Some(path.to_str().unwrap()));
+        // Takes the last user message, not the first or all of them
+        assert_eq!(result, "yes do it");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_user_prompt_single_message_still_works() {
+        let path = std::env::temp_dir().join("vibecheck_test_transcript5.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"Add auth"}}"#).unwrap();
+        drop(f);
+
+        let result = extract_user_prompt(Some(path.to_str().unwrap()));
+        assert_eq!(result, "Add auth");
         let _ = fs::remove_file(&path);
     }
 
