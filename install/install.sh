@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# VibeCheck installer
-# Installs the VibeCheck Stop hook into a Claude Code project or globally.
+# VibeCheck installer - works standalone (curl pipe) or from repo clone
+# curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 REPO="akshan-main/vibe-check"
+RAW_URL="https://raw.githubusercontent.com/${REPO}/main"
 BINARY_NAME="vibecheck"
 CONFIG_NAME="vibecheck.json"
-HOOK_MARKER="vibecheck"  # used to detect existing installs
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,17 +33,17 @@ Arguments:
 Options:
   --global      Install to ~/.claude/ (applies to all projects)
   --skill-only  Only install the /quiz slash command (no auto-trigger hook)
-  --update      Update to the latest version (pulls latest, re-installs)
   --uninstall   Remove VibeCheck
   --help        Show this help message
 
+One-liner install:
+  curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash
+
 Examples:
-  bash install.sh                     # Install everything in current project
-  bash install.sh /path/to/project    # Install in specific project
-  bash install.sh --skill-only        # Only the /quiz command, no auto-quiz
-  bash install.sh --global            # Install globally
-  bash install.sh --update            # Update to latest version
-  bash install.sh --uninstall         # Uninstall from current project
+  bash install.sh                     # Install in current project
+  bash install.sh --global            # Install globally (all projects)
+  bash install.sh --skill-only        # Only /quiz command, no auto-quiz
+  bash install.sh --uninstall         # Remove VibeCheck
 EOF
 }
 
@@ -51,7 +51,6 @@ EOF
 GLOBAL=false
 UNINSTALL=false
 SKILL_ONLY=false
-UPDATE=false
 TARGET_DIR="."
 
 while [[ $# -gt 0 ]]; do
@@ -59,10 +58,9 @@ while [[ $# -gt 0 ]]; do
         --global)     GLOBAL=true; shift ;;
         --uninstall)  UNINSTALL=true; shift ;;
         --skill-only) SKILL_ONLY=true; shift ;;
-        --update)     UPDATE=true; shift ;;
-        --help|-h)   usage; exit 0 ;;
-        -*)          error "Unknown option: $1"; usage; exit 1 ;;
-        *)           TARGET_DIR="$1"; shift ;;
+        --help|-h)    usage; exit 0 ;;
+        -*)           error "Unknown option: $1"; usage; exit 1 ;;
+        *)            TARGET_DIR="$1"; shift ;;
     esac
 done
 
@@ -87,13 +85,13 @@ detect_platform() {
     case "$os" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
-        *)      error "Unsupported OS: $os"; exit 1 ;;
+        *)      error "Unsupported OS: $os. Use 'cargo install vibecheck' instead."; exit 1 ;;
     esac
 
     case "$arch" in
         x86_64|amd64)  arch="x86_64" ;;
         arm64|aarch64) arch="arm64" ;;
-        *)             error "Unsupported architecture: $arch"; exit 1 ;;
+        *)             error "Unsupported architecture: $arch. Use 'cargo install vibecheck' instead."; exit 1 ;;
     esac
 
     echo "${os}-${arch}"
@@ -105,42 +103,97 @@ download_binary() {
     local dest="$2"
     local url="https://github.com/${REPO}/releases/latest/download/vibecheck-${platform}"
 
-    info "Downloading vibecheck binary for ${platform}..."
+    info "Downloading vibecheck for ${platform}..."
     if curl -fsSL --retry 3 -o "$dest" "$url" 2>/dev/null; then
         chmod +x "$dest"
         ok "Binary downloaded."
         return 0
     fi
 
-    warn "Download failed. Trying to build from source..."
-    return 1
+    warn "Download failed."
+
+    # Try building from source if cargo is available
+    if command -v cargo &>/dev/null; then
+        info "Trying cargo install..."
+        cargo install vibecheck 2>/dev/null && return 0
+    fi
+
+    error "Could not download or build vibecheck."
+    error "Try: cargo install vibecheck"
+    exit 1
 }
 
-# ---- Build from source ----
-build_from_source() {
+# ---- Embedded config (no repo clone needed) ----
+write_default_config() {
     local dest="$1"
+    cat > "$dest" <<'JSONEOF'
+{
+  "enabled": true,
+  "minSecondsBetweenQuizzes": 900,
+  "maxDiffChars": 2000,
+  "difficulty": "normal",
+  "trackProgress": false
+}
+JSONEOF
+}
 
-    if ! command -v cargo &>/dev/null; then
-        error "Cannot download binary and cargo is not installed."
-        error "Install Rust (https://rustup.rs) or download a binary manually."
-        exit 1
-    fi
+# ---- Embedded skill (no repo clone needed) ----
+write_skill() {
+    local dest="$1"
+    cat > "$dest" <<'SKILLEOF'
+---
+name: quiz
+description: On-demand product comprehension quiz about your current code changes
+---
 
-    # Find the repo root (where Cargo.toml is)
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local repo_root="$script_dir/.."
+Run a VibeCheck quiz right now based on the current git diff.
 
-    if [[ ! -f "$repo_root/Cargo.toml" ]]; then
-        error "Cargo.toml not found. Run install.sh from the vibecheck repo."
-        exit 1
-    fi
+STEP 1: Run these git commands to gather context:
+- `git diff --name-only` and `git diff --staged --name-only` to get changed files
+- `git diff --unified=3` and `git diff --staged --unified=3` to get the diff (truncate to 2000 chars if very long)
 
-    info "Building from source..."
-    cargo build --release --manifest-path "$repo_root/Cargo.toml"
-    cp "$repo_root/target/release/vibecheck" "$dest"
-    chmod +x "$dest"
-    ok "Built from source."
+If there are no changes, say "No code changes to quiz on. Make some changes first!" and stop.
+
+STEP 2: Analyze the diff and create ONE multiple-choice question.
+
+IMPORTANT: Focus on the MOST IMPORTANT change, not the largest one. A 2-line behavior change can matter more than 50 lines of boilerplate. Read the entire diff, use your understanding of the code and the product, and pick the single change that has the most meaningful impact on what users experience. Ignore formatting, imports, renaming, and refactors that don't change behavior.
+
+Classify what happened:
+- Was a feature ADDED? (new capability that didn't exist before)
+- Was a feature CHANGED? (existing behavior now works differently)
+- Was something REMOVED? (capability or safeguard that's now gone)
+- Was it a FIX? (broken thing that now works)
+
+Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products - they need to understand what their product does, not how to read code.
+
+QUESTION FORMULA - pick one:
+  * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
+  * WHAT'S NEW: "A user tries [action] for the first time. What do they experience?"
+  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before - or what protection is no longer there?"
+  * SIDE EFFECTS: "This change also affects [related area]. What's different there now?"
+  * EDGE CASE: "A user does [unusual but realistic action]. How does your app handle it after this change?"
+  * LIMITS: "What's the maximum/minimum [value/count/size] this feature now supports? What happens at the boundary?"
+  * DATA: "After this change, what new data is being stored/sent/exposed? Who can see it?"
+
+NEVER ASK:
+  * About code syntax, language features, or programming concepts
+  * About which library or framework is used
+  * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
+  * Generic questions unrelated to this specific diff
+
+WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
+
+Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
+
+STEP 3: After the user answers:
+1. Explain the correct answer in plain language - what the product does now and why
+2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
+3. PROMPTING TIP: You have the full conversation context - you know what the user asked for and what you built. Compare those. If their prompt was vague and the implementation has gaps or surprises they might not expect, suggest a more specific prompt that would have covered those gaps. If their prompt was already detailed and the implementation matches well, say so. Don't fabricate issues.
+
+End your message with: [vibecheck:done]
+
+IMPORTANT: Do NOT use Edit, Write, or any code-modifying tools. This is learning-only.
+SKILLEOF
 }
 
 # ---- Merge settings.json ----
@@ -148,12 +201,10 @@ merge_settings() {
     local settings_file="$1"
     local hook_command="$2"
 
-    # Create file if missing
     if [[ ! -f "$settings_file" ]]; then
         echo '{}' > "$settings_file"
     fi
 
-    # Backup
     cp "$settings_file" "${settings_file}.bak.$(date +%s)"
 
     if command -v python3 &>/dev/null; then
@@ -161,7 +212,7 @@ merge_settings() {
     elif command -v jq &>/dev/null; then
         merge_settings_jq "$settings_file" "$hook_command"
     else
-        error "Neither python3 nor jq found. Please manually add the hook to $settings_file"
+        error "Neither python3 nor jq found. Add the hook manually to $settings_file"
         cat <<EOF
 
 Add this to your $settings_file under "hooks.Stop":
@@ -185,12 +236,11 @@ merge_settings_python() {
     local hook_command="$2"
 
     python3 - "$settings_file" "$hook_command" <<'PYEOF'
-import json, sys, os, shutil, time
+import json, sys
 
 settings_file = sys.argv[1]
 hook_command = sys.argv[2]
 
-# Read existing
 try:
     with open(settings_file, 'r') as f:
         data = json.load(f)
@@ -200,18 +250,15 @@ except (json.JSONDecodeError, FileNotFoundError):
 if not isinstance(data, dict):
     data = {}
 
-# Ensure structure
 data.setdefault("hooks", {})
 data["hooks"].setdefault("Stop", [])
 
-# Check for duplicate
 for entry in data["hooks"]["Stop"]:
     for hook in entry.get("hooks", []):
         if "vibecheck" in hook.get("command", ""):
             print("Already installed - skipping settings merge.")
             sys.exit(0)
 
-# Add our entry
 new_entry = {
     "hooks": [
         {
@@ -235,10 +282,8 @@ merge_settings_jq() {
     local settings_file="$1"
     local hook_command="$2"
 
-    # Check for existing
     local existing
     existing=$(jq -r \
-        --arg cmd "$hook_command" \
         '[.hooks.Stop // [] | .[] | .hooks // [] | .[] | select(.command | contains("vibecheck"))] | length' \
         "$settings_file" 2>/dev/null || echo "0")
 
@@ -282,13 +327,11 @@ except (json.JSONDecodeError, FileNotFoundError):
 if "hooks" not in data or "Stop" not in data["hooks"]:
     sys.exit(0)
 
-# Filter out entries containing "vibecheck"
 data["hooks"]["Stop"] = [
     entry for entry in data["hooks"]["Stop"]
     if not any("vibecheck" in h.get("command", "") for h in entry.get("hooks", []))
 ]
 
-# Clean up empty structures
 if not data["hooks"]["Stop"]:
     del data["hooks"]["Stop"]
 if not data["hooks"]:
@@ -322,69 +365,40 @@ PYEOF
 do_install() {
     info "Installing VibeCheck..."
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-    # Always install the /quiz skill (on-demand command)
+    # Install /quiz skill
     local skill_dir="$CLAUDE_DIR/skills/quiz"
-    local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
     mkdir -p "$skill_dir"
-    if [[ -f "$template_skill" ]]; then
-        # Back up existing skill if user has customized it
-        if [[ -f "$skill_dir/SKILL.md" ]]; then
-            if ! diff -q "$template_skill" "$skill_dir/SKILL.md" &>/dev/null; then
-                cp "$skill_dir/SKILL.md" "$skill_dir/SKILL.md.bak.$(date +%s)"
-                info "Existing skill backed up (had custom changes)."
-            fi
-        fi
-        cp "$template_skill" "$skill_dir/SKILL.md"
-        ok "Skill /quiz installed (on-demand quiz)."
+    if [[ -f "$skill_dir/SKILL.md" ]]; then
+        info "Skill already exists, keeping your version."
+    else
+        write_skill "$skill_dir/SKILL.md"
+        ok "Skill /quiz installed."
     fi
 
     if $SKILL_ONLY; then
         echo ""
-        ok "VibeCheck installed (skill only)!"
-        info "Type /quiz in Claude Code to quiz yourself on your current diff."
+        ok "Done! Type /quiz in Claude Code to quiz yourself."
         return 0
     fi
 
-    # --- Full install: hook binary + config + settings merge ---
-
-    # Create directories
+    # --- Full install: binary + config + settings ---
     mkdir -p "$HOOKS_DIR"
 
-    # Get the binary
+    # Binary
     local binary_dest="$HOOKS_DIR/$BINARY_NAME"
     local platform
     platform="$(detect_platform)"
+    download_binary "$platform" "$binary_dest"
 
-    if ! download_binary "$platform" "$binary_dest"; then
-        build_from_source "$binary_dest"
-    fi
-
-    # Copy config (don't overwrite existing)
-    local template_config="$script_dir/../templates/project/.claude/$CONFIG_NAME"
-
+    # Config (don't overwrite)
     if [[ ! -f "$CLAUDE_DIR/$CONFIG_NAME" ]]; then
-        if [[ -f "$template_config" ]]; then
-            cp "$template_config" "$CLAUDE_DIR/$CONFIG_NAME"
-            ok "Config created at $CLAUDE_DIR/$CONFIG_NAME"
-        else
-            # Create default config inline
-            cat > "$CLAUDE_DIR/$CONFIG_NAME" <<'JSONEOF'
-{
-  "enabled": true,
-  "minSecondsBetweenQuizzes": 900,
-  "maxDiffChars": 2000
-}
-JSONEOF
-            ok "Default config created."
-        fi
+        write_default_config "$CLAUDE_DIR/$CONFIG_NAME"
+        ok "Config created."
     else
         info "Config already exists, keeping your settings."
     fi
 
-    # Update .gitignore
+    # .gitignore
     local gitignore="$CLAUDE_DIR/.gitignore"
     if [[ -f "$gitignore" ]]; then
         if ! grep -qxF ".vibecheck/" "$gitignore" 2>/dev/null; then
@@ -401,103 +415,49 @@ JSONEOF
     else
         hook_command="\$CLAUDE_PROJECT_DIR/.claude/hooks/vibecheck"
     fi
-
     merge_settings "$SETTINGS_FILE" "$hook_command"
 
     echo ""
     ok "VibeCheck installed!"
-    info "Config: $CLAUDE_DIR/$CONFIG_NAME"
-    info "Binary: $binary_dest"
-    info "Settings: $SETTINGS_FILE"
-    info "Skill: /quiz (on-demand quiz)"
     echo ""
-    info "Start using Claude Code - VibeCheck will auto-trigger after code changes."
+    info "Auto-quiz triggers after Claude Code finishes a task."
     info "Or type /quiz anytime for an on-demand quiz."
+    info "Config: $CLAUDE_DIR/$CONFIG_NAME"
 }
 
 # ---- Uninstall ----
 do_uninstall() {
     info "Uninstalling VibeCheck..."
 
-    # Remove binary
     if [[ -f "$HOOKS_DIR/$BINARY_NAME" ]]; then
         rm "$HOOKS_DIR/$BINARY_NAME"
         ok "Binary removed."
     fi
 
-    # Remove state directory
     if [[ -d "$STATE_DIR" ]]; then
         rm -rf "$STATE_DIR"
-        ok "State directory removed."
+        ok "State removed."
     fi
 
-    # Remove skill (back up if customized)
     if [[ -d "$CLAUDE_DIR/skills/quiz" ]]; then
-        local skill_file="$CLAUDE_DIR/skills/quiz/SKILL.md"
-        local script_dir
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
-        if [[ -f "$skill_file" ]] && [[ -f "$template_skill" ]]; then
-            if ! diff -q "$template_skill" "$skill_file" &>/dev/null; then
-                cp "$skill_file" "$CLAUDE_DIR/skills/quiz_SKILL.md.bak.$(date +%s)"
-                info "Custom skill backed up before removal."
-            fi
-        fi
         rm -rf "$CLAUDE_DIR/skills/quiz"
-        ok "Skill /quiz removed."
+        ok "Skill removed."
     fi
 
-    # Remove from settings.json
     remove_from_settings "$SETTINGS_FILE"
 
-    # Remove .gitignore entry
     local gitignore="$CLAUDE_DIR/.gitignore"
     if [[ -f "$gitignore" ]]; then
-        if command -v sed &>/dev/null; then
-            sed -i.bak '/^\.vibecheck\/$/d' "$gitignore" 2>/dev/null || true
-            rm -f "${gitignore}.bak"
-        fi
+        sed -i.bak '/^\.vibecheck\/$/d' "$gitignore" 2>/dev/null || true
+        rm -f "${gitignore}.bak"
     fi
 
     echo ""
     ok "VibeCheck uninstalled."
-    info "Config file left at $CLAUDE_DIR/$CONFIG_NAME (delete manually if desired)."
-}
-
-# ---- Update ----
-do_update() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local repo_root="$script_dir/.."
-
-    if [[ ! -d "$repo_root/.git" ]]; then
-        error "Not a git checkout. Clone the repo first, then run --update."
-        exit 1
-    fi
-
-    info "Pulling latest version..."
-    git -C "$repo_root" pull --ff-only origin main || {
-        error "Failed to pull. You may have local changes. Try: git -C $repo_root pull"
-        exit 1
-    }
-
-    ok "Updated to latest."
-    info "Re-running install..."
-    echo ""
-
-    # Re-run install (without --update to avoid loop)
-    local args=()
-    $GLOBAL && args+=(--global)
-    $SKILL_ONLY && args+=(--skill-only)
-    [[ "$TARGET_DIR" != "$(pwd)" ]] && args+=("$TARGET_DIR")
-
-    bash "$repo_root/install/install.sh" "${args[@]}"
 }
 
 # ---- Main ----
-if $UPDATE; then
-    do_update
-elif $UNINSTALL; then
+if $UNINSTALL; then
     do_uninstall
 else
     do_install

@@ -33,92 +33,33 @@ Skip it every time if you want. No scores. No answers saved. Just a quick realit
 
 ## Install
 
-### Quick install
+One command. No dependencies. Downloads a pre-built binary and wires everything up.
 
 ```bash
-cargo install vibecheck
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash
 ```
 
-Then either use it standalone (`vibecheck quiz`) or set up Claude Code integration below.
-
-### Option A: Install script (Claude Code integration)
-
-```bash
-git clone https://github.com/akshan-main/vibe-check.git
-bash vibe-check/install/install.sh      # install in current project
-```
-
-The script copies a binary, a config file, and adds one entry to your `settings.json`. [Read it yourself](install/install.sh) if you want.
+That's it. Works in both Claude Code CLI and VS Code extension.
 
 <details>
-<summary>More script options</summary>
+<summary>More options</summary>
 
 ```bash
-bash vibe-check/install/install.sh --global          # all projects
-bash vibe-check/install/install.sh --skill-only      # only /quiz, no auto-trigger
-bash vibe-check/install/install.sh /path/to/project  # specific project
+# Install globally (all projects)
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --global
+
+# Only the /quiz command, no auto-trigger
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --skill-only
+
+# Uninstall
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
+
+# Or if you have Rust: cargo install vibecheck
 ```
 
 </details>
 
-### Option B: Manual setup (no script)
-
-**For just the `/quiz` command** (on-demand only):
-
-Copy the skill folder into your project:
-```bash
-git clone https://github.com/akshan-main/vibe-check.git
-cp -r vibe-check/templates/project/.claude/skills/quiz .claude/skills/quiz
-```
-
-Done. Type `/quiz` in Claude Code anytime.
-
-**For auto-quiz after every task**, additionally:
-
-1. Build or download the binary:
-   ```bash
-   cd vibe-check && cargo build --release
-   ```
-
-2. Copy the binary and config into your project:
-   ```bash
-   mkdir -p .claude/hooks
-   cp vibe-check/target/release/vibecheck .claude/hooks/vibecheck
-   cp vibe-check/templates/project/.claude/vibecheck.json .claude/vibecheck.json
-   ```
-
-3. Add the Stop hook to `.claude/settings.json` (create the file if it doesn't exist):
-   ```json
-   {
-     "hooks": {
-       "Stop": [
-         {
-           "hooks": [
-             {
-               "type": "command",
-               "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/vibecheck",
-               "timeout": 5
-             }
-           ]
-         }
-       ]
-     }
-   }
-   ```
-
-   If you already have a `settings.json`, just add the Stop hook entry alongside your existing config.
-
-### Option C: Global install (all projects)
-
-```bash
-bash vibe-check/install/install.sh --global
-```
-
-Or manually: follow Option B but place everything under `~/.claude/` instead of `.claude/`, and use `$HOME/.claude/hooks/vibecheck` as the hook command.
-
----
-
-Works in both **Claude Code CLI** and the **VS Code extension** since they share the same settings files.
+[Read the install script](install/install.sh) - it downloads one binary, creates a config file, and adds one entry to your Claude Code settings. Nothing else.
 
 ## How It Works
 
@@ -229,20 +170,10 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 | `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
 | `trackProgress` | `false` | Set to `true` to track your quiz stats locally (total, correct, streak) |
 
-## Update
-
-```bash
-bash vibe-check/install/install.sh --update
-```
-
-Pulls the latest version and re-installs. Your config (`vibecheck.json`) is preserved. If you customized the `/quiz` skill, it gets backed up before overwriting.
-
 ## Uninstall
 
 ```bash
-bash vibe-check/install/install.sh --uninstall
-# or for global:
-bash vibe-check/install/install.sh --global --uninstall
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
 ```
 
 ## FAQ
