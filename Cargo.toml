@@ -1,10 +1,14 @@
 [package]
 name = "vibecheck"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Diff-native comprehension checkpoints for Claude Code"
+description = "Reality checks for vibe coders. One question per diff."
 license = "MIT"
 repository = "https://github.com/akshan-main/vibe-check"
+homepage = "https://github.com/akshan-main/vibe-check"
+keywords = ["claude", "vibe-coding", "developer-tools", "code-review", "comprehension"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -1,5 +1,7 @@
 {
   "enabled": true,
   "minSecondsBetweenQuizzes": 900,
-  "maxDiffChars": 2000
+  "maxDiffChars": 2000,
+  "difficulty": "normal",
+  "trackProgress": false
 }

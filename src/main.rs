@@ -24,6 +24,9 @@ struct Config {
     min_seconds_between_quizzes: Option<u64>,
     #[serde(rename = "maxDiffChars")]
     max_diff_chars: Option<usize>,
+    difficulty: Option<String>,
+    #[serde(rename = "trackProgress")]
+    track_progress: Option<bool>,
 }
 
 impl Default for Config {
@@ -32,6 +35,8 @@ impl Default for Config {
             enabled: Some(true),
             min_seconds_between_quizzes: Some(900),
             max_diff_chars: Some(2000),
+            difficulty: Some("normal".to_string()),
+            track_progress: Some(false),
         }
     }
 }
@@ -42,6 +47,12 @@ struct State {
     last_diff_hash: String,
     #[serde(default)]
     snoozed_until: u64,
+    #[serde(default)]
+    total_quizzes: u64,
+    #[serde(default)]
+    total_correct: u64,
+    #[serde(default)]
+    streak: u64,
 }
 
 #[derive(Serialize)]
@@ -146,11 +157,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         last_quiz_at: now,
         last_diff_hash: diff_hash,
         snoozed_until: 0,
+        total_quizzes: state.total_quizzes,
+        total_correct: state.total_correct,
+        streak: state.streak,
     };
     save_state(&state_path, &new_state);
 
     // Extract user's original prompt from transcript
     let user_prompt = extract_user_prompt(payload.transcript_path.as_deref());
+
+    let difficulty = config.difficulty.as_deref().unwrap_or("normal");
+    let track_progress = config.track_progress.unwrap_or(false);
 
     // Build the instruction
     let state_path_str = state_path.to_string_lossy().to_string();
@@ -162,6 +179,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &state_path_str,
         &config_path_str,
         &user_prompt,
+        difficulty,
+        track_progress,
+        &state,
     );
 
     // Output block decision
@@ -375,17 +395,36 @@ fn save_state(path: &Path, state: &State) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_reason(
     files_line: &str,
     diff_snippet: &str,
     state_path: &str,
     config_path: &str,
     user_prompt: &str,
+    difficulty: &str,
+    track_progress: bool,
+    state: &State,
 ) -> String {
     let prompt_section = if user_prompt.is_empty() {
         String::new()
     } else {
         format!("\nUser's original prompt:\n{}\n", user_prompt)
+    };
+
+    let difficulty_instruction = match difficulty {
+        "beginner" => "\nDIFFICULTY: BEGINNER - Ask about the most obvious, surface-level change. What did the feature add or change that a user would immediately notice? Keep the question simple and the wrong answers clearly wrong.\n",
+        "advanced" => "\nDIFFICULTY: ADVANCED - Ask about edge cases, security implications, data flow, or subtle behavior changes that are easy to miss. The wrong answers should be plausible even to someone paying close attention.\n",
+        _ => "",
+    };
+
+    let tracking_section = if track_progress {
+        format!(
+            "\nPROGRESS TRACKING: After the quiz is done (right before [vibecheck:done]), run this Bash command to update stats:\npython3 -c \"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['total_quizzes']=d.get('total_quizzes',0)+1; correct=sys.argv[2]=='1'; d['total_correct']=d.get('total_correct',0)+(1 if correct else 0); d['streak']=(d.get('streak',0)+1) if correct else 0; p.write_text(json.dumps(d,indent=2))\" '{}' {{CORRECT}}\nReplace {{CORRECT}} with 1 if the user answered correctly, 0 if wrong.\nThen show: \"Stats: {{total_correct}}/{{total_quizzes}} correct (streak: {{streak}})\"\nCurrent stats: {}/{} correct, streak: {}\n",
+            state_path, state.total_correct, state.total_quizzes, state.streak
+        )
+    } else {
+        String::new()
     };
 
     format!(
@@ -416,7 +455,7 @@ STEP 2: Handle the response:
 - If "Yes (10s)": continue to STEP 3.
 
 STEP 3: Analyze the diff and create ONE multiple-choice question.
-
+{difficulty_instruction}
 IMPORTANT: Focus on the MOST IMPORTANT change, not the largest one. A 2-line behavior change can matter more than 50 lines of boilerplate. Read the entire diff, use your understanding of the code and the product, and pick the single change that has the most meaningful impact on what users experience. Ignore formatting, imports, renaming, and refactors that don't change behavior.
 
 Classify what happened:
@@ -452,7 +491,7 @@ STEP 4: After the user answers:
 3. PROMPTING TIP: Compare the user's original prompt (provided below) with what was actually built (the diff). If the prompt was vague and the implementation has gaps or surprises the user might not expect, suggest a more specific prompt that would have covered those gaps. If the prompt was already detailed and the implementation matches well, say so - "Your prompt covered this well." Don't fabricate issues.
 
 Then end your message with: [vibecheck:done]
-
+{tracking_section}
 CHANGE CONTEXT:
 Changed files: {files_line}
 {prompt_section}
@@ -462,7 +501,9 @@ Diff:
         prompt_section = prompt_section,
         diff_snippet = diff_snippet,
         state_path = state_path,
-        config_path = config_path
+        config_path = config_path,
+        difficulty_instruction = difficulty_instruction,
+        tracking_section = tracking_section
     )
 }
 
@@ -520,12 +561,18 @@ mod tests {
             last_quiz_at: 12345,
             last_diff_hash: "abc".to_string(),
             snoozed_until: 99999,
+            total_quizzes: 10,
+            total_correct: 7,
+            streak: 3,
         };
         save_state(&path, &state);
         let loaded = load_state(&path);
         assert_eq!(loaded.last_quiz_at, 12345);
         assert_eq!(loaded.last_diff_hash, "abc");
         assert_eq!(loaded.snoozed_until, 99999);
+        assert_eq!(loaded.total_quizzes, 10);
+        assert_eq!(loaded.total_correct, 7);
+        assert_eq!(loaded.streak, 3);
         let _ = fs::remove_file(&path);
     }
 
@@ -609,12 +656,16 @@ mod tests {
 
     #[test]
     fn build_reason_includes_prompt() {
+        let state = State::default();
         let reason = build_reason(
             "file.rs",
             "diff content",
             "/tmp/state",
             "/tmp/config",
             "Add auth",
+            "normal",
+            false,
+            &state,
         );
         assert!(reason.contains("Add auth"));
         assert!(reason.contains("User's original prompt"));
@@ -622,8 +673,51 @@ mod tests {
 
     #[test]
     fn build_reason_no_prompt() {
-        let reason = build_reason("file.rs", "diff content", "/tmp/state", "/tmp/config", "");
+        let state = State::default();
+        let reason = build_reason(
+            "file.rs",
+            "diff content",
+            "/tmp/state",
+            "/tmp/config",
+            "",
+            "normal",
+            false,
+            &state,
+        );
         assert!(!reason.contains("User's original prompt"));
+    }
+
+    #[test]
+    fn build_reason_beginner_difficulty() {
+        let state = State::default();
+        let reason = build_reason(
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "beginner", false, &state,
+        );
+        assert!(reason.contains("BEGINNER"));
+    }
+
+    #[test]
+    fn build_reason_advanced_difficulty() {
+        let state = State::default();
+        let reason = build_reason(
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "advanced", false, &state,
+        );
+        assert!(reason.contains("ADVANCED"));
+    }
+
+    #[test]
+    fn build_reason_with_tracking() {
+        let state = State {
+            total_quizzes: 5,
+            total_correct: 3,
+            streak: 2,
+            ..Default::default()
+        };
+        let reason = build_reason(
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "normal", true, &state,
+        );
+        assert!(reason.contains("PROGRESS TRACKING"));
+        assert!(reason.contains("3/5"));
     }
 
     #[test]
@@ -632,6 +726,8 @@ mod tests {
         assert_eq!(cfg.enabled, Some(true));
         assert_eq!(cfg.min_seconds_between_quizzes, Some(900));
         assert_eq!(cfg.max_diff_chars, Some(2000));
+        assert_eq!(cfg.difficulty.as_deref(), Some("normal"));
+        assert_eq!(cfg.track_progress, Some(false));
     }
 
     #[test]

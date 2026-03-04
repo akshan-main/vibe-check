@@ -163,7 +163,9 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 {
   "enabled": true,
   "minSecondsBetweenQuizzes": 900,
-  "maxDiffChars": 2000
+  "maxDiffChars": 2000,
+  "difficulty": "normal",
+  "trackProgress": false
 }
 ```
 
@@ -172,6 +174,8 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 | `enabled` | `true` | Kill switch for auto-quiz (does not affect `/quiz`) |
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
+| `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
+| `trackProgress` | `false` | Set to `true` to track your quiz stats locally (total, correct, streak) |
 
 ## Update
 
