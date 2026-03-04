@@ -1,10 +1,10 @@
 <p align="center">
   <h1 align="center">VibeCheck</h1>
   <p align="center">
-    <strong>Become a better prompter, one diff at a time.</strong>
+    <strong>Do you actually know what your app just did?</strong>
   </p>
   <p align="center">
-    One question. Based on your exact diff. 10 seconds. Always skippable.
+    One question. Your exact diff. 10 seconds. Skip anytime.
   </p>
   <p align="center">
     <a href="#install">Install</a> &middot;
@@ -16,25 +16,20 @@
 
 ---
 
-Every time Claude Code finishes a task, VibeCheck asks you **one** quick question about what just changed in your product — and then tells you **how to prompt better next time**.
+You tell Claude to add rate limiting. It does. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
 
-You prompted *"Add rate limiting."* Claude built it. But did it return a friendly error or a raw 429? Is there a Retry-After header? VibeCheck surfaces exactly these gaps — then suggests a better prompt: *"Next time, try: 'Add rate limiting AND return a friendly error with a Retry-After header.'"*
+VibeCheck asks you stuff like that. One question after Claude finishes a task, based on your actual diff. It reads your original prompt, looks at what was built, and asks if you know what changed in your product. Not code trivia. Not "what does this function do." Just: do you understand what your app does now?
 
-Over time, your prompts get more complete. Fewer surprises. Better products.
+If your prompt was vague and the implementation has gaps you didn't think about, it'll point that out. If your prompt already covered everything, it'll tell you that too.
 
-- **Improves your prompting** - every question ends with a concrete prompting tip you can use next time
-- **Product-focused** - asks what your *app does*, not how the code works
-- **AI-picked** - uses Claude's understanding of your code to find the most important change, not the biggest diff
-- **10 seconds** - one click to answer, brief explanation, done
-- **Always skippable** - Yes / No / Snooze 30m / Disable
-- **Zero storage** - no scores, no telemetry, no answers saved to disk
+You can skip it every time. No scores. No answers saved. It's just a quick reality check. (A small local state file tracks when the last quiz ran so it doesn't over-trigger.)
 
 <!-- TODO: Add demo GIF here showing the quiz flow -->
 <!-- ![VibeCheck demo](assets/demo.gif) -->
 
 ## Install
 
-Pick what works for you. All three methods give you the same result.
+Three ways to set it up. Pick whatever you're comfortable with.
 
 ### Option A: Install script
 
@@ -43,7 +38,7 @@ git clone https://github.com/akshan-main/vibe-check.git
 bash vibe-check/install/install.sh      # install in current project
 ```
 
-The script is [~100 lines of bash](install/install.sh) — it copies a binary, a config file, and merges one entry into your `settings.json`. You can read the whole thing in 2 minutes.
+The script copies a binary, a config file, and adds one entry to your `settings.json`. [Read it yourself](install/install.sh) if you want.
 
 <details>
 <summary>More script options</summary>
@@ -113,7 +108,7 @@ Or manually: follow Option B but place everything under `~/.claude/` instead of 
 
 ---
 
-Works in both **Claude Code CLI** and the **VS Code extension** — they share the same settings files.
+Works in both **Claude Code CLI** and the **VS Code extension** since they share the same settings files.
 
 ## How It Works
 
@@ -144,21 +139,21 @@ Claude: *writes code, finishes task*
   │  ○ D) They get redirected to the homepage           │
   └─────────────────────────────────────────────────────┘
 
-Claude: "B — the rate limiter returns a 429 status code
-        with no custom message or retry-after header.
-        Your users will see a raw error.
+Claude: "B. The rate limiter returns a 429 with no custom
+        message. Your users will see a raw error.
 
-        Prompting tip: Next time, try: 'Add rate limiting
-        AND return a friendly error message with a
-        Retry-After header when the limit is hit.' This
-        way Claude handles the UX in the same pass."
+        Your prompt said 'add rate limiting' but didn't
+        mention what the user should see when they hit it.
+        A more complete prompt: 'Add rate limiting and
+        return a friendly error with a Retry-After header
+        when the limit is hit.'"
 ```
 
-Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) checks `git diff`, figures out what feature was added/changed/removed, and asks one product comprehension question.
+Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) reads your git diff, reads your original prompt from the session transcript, and asks one question about what your product actually does now.
 
 ### On-demand (`/quiz`)
 
-Type `/quiz` anytime in Claude Code to quiz yourself on the current diff. No throttle, no conditions — just the quiz.
+Type `/quiz` anytime in Claude Code to quiz yourself on the current diff.
 
 ## Configure
 
@@ -191,13 +186,13 @@ bash vibe-check/install/install.sh --global --uninstall
 <details>
 <summary><strong>Can't I just ask Claude about my code?</strong></summary>
 
-You can. You won't. VibeCheck is proactive — it catches gaps you didn't know to ask about. More importantly, it gives you a prompting tip so your *next* prompt is better. Asking Claude "what did you just do?" teaches you about this change. VibeCheck teaches you how to prompt so the next change doesn't have the same gaps.
+You can. You won't. VibeCheck is proactive - it catches the gaps you didn't know to ask about. And it compares your original prompt to what was actually built, so you know exactly where the disconnect was.
 </details>
 
 <details>
-<summary><strong>How is this different from Claude's learning mode?</strong></summary>
+<summary><strong>How is this different from learning mode?</strong></summary>
 
-Learning mode explains *how the code works* while Claude writes it. VibeCheck does something different: it checks if you understand what your *product does* after the change, and gives you a better prompt for next time. "What does the user see when they hit the rate limit?" vs "here's how the middleware pipeline works."
+Learning mode teaches you how the code works. VibeCheck checks if you know what your product does. "What does the user see when they hit the rate limit?" vs "here's how the middleware pipeline works."
 </details>
 
 <details>
@@ -221,25 +216,25 @@ Yes. Set `minSecondsBetweenQuizzes` in `vibecheck.json`. Default is 900 (15 minu
 <details>
 <summary><strong>What if I already have Stop hooks?</strong></summary>
 
-The installer merges — it adds VibeCheck alongside your existing hooks, never overwrites.
+The installer merges. It adds VibeCheck alongside your existing hooks, never overwrites.
 </details>
 
 <details>
 <summary><strong>Does it store my answers?</strong></summary>
 
-No. Answers exist only in the chat session transcript. No scores, no telemetry, no files written to disk.
+No answers or scores are stored. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling, but nothing about your responses.
 </details>
 
 <details>
 <summary><strong>Does the quiz affect what Claude does next?</strong></summary>
 
-No. The quiz runs after the main task is fully complete. The instruction explicitly tells Claude not to let quiz answers influence behavior.
+No. The quiz runs after the main task is done. Quiz answers don't influence anything.
 </details>
 
 <details>
 <summary><strong>I only want on-demand quizzes, not auto-trigger.</strong></summary>
 
-Use `--skill-only` during install. Or set `"enabled": false` in `vibecheck.json` to disable auto-trigger while keeping the hook installed.
+Use `--skill-only` during install. Or set `"enabled": false` in `vibecheck.json`.
 </details>
 
 ## Build from Source
@@ -251,5 +246,4 @@ cargo build --release
 
 ## Contributing
 
-PRs welcome. Keep it simple — the core product is one question, one diff, 10 seconds.
-
+PRs welcome. Keep it simple. One question, one diff, 10 seconds.

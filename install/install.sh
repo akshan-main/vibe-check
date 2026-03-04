@@ -92,12 +92,6 @@ detect_platform() {
         *)             error "Unsupported architecture: $arch"; exit 1 ;;
     esac
 
-    # Linux arm64 not in our build matrix yet
-    if [[ "$os" == "linux" && "$arch" == "arm64" ]]; then
-        error "Linux arm64 binaries not available yet. Install with: cargo install --path ."
-        exit 1
-    fi
-
     echo "${os}-${arch}"
 }
 
@@ -210,7 +204,7 @@ data["hooks"].setdefault("Stop", [])
 for entry in data["hooks"]["Stop"]:
     for hook in entry.get("hooks", []):
         if "vibecheck" in hook.get("command", ""):
-            print("Already installed — skipping settings merge.")
+            print("Already installed - skipping settings merge.")
             sys.exit(0)
 
 # Add our entry
@@ -245,7 +239,7 @@ merge_settings_jq() {
         "$settings_file" 2>/dev/null || echo "0")
 
     if [[ "$existing" != "0" ]]; then
-        info "Already installed — skipping settings merge."
+        info "Already installed - skipping settings merge."
         return 0
     fi
 
@@ -406,7 +400,7 @@ JSONEOF
     info "Settings: $SETTINGS_FILE"
     info "Skill: /quiz (on-demand quiz)"
     echo ""
-    info "Start using Claude Code — VibeCheck will auto-trigger after code changes."
+    info "Start using Claude Code - VibeCheck will auto-trigger after code changes."
     info "Or type /quiz anytime for an on-demand quiz."
 }
 

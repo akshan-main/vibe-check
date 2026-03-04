@@ -14,6 +14,7 @@ struct HookPayload {
     stop_hook_active: Option<bool>,
     last_assistant_message: Option<String>,
     cwd: Option<String>,
+    transcript_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,7 +51,7 @@ struct BlockDecision {
 }
 
 fn main() {
-    if let Err(_) = run() {
+    if run().is_err() {
         // Any error → exit 0 (allow stop, never crash)
         std::process::exit(0);
     }
@@ -118,7 +119,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Get diff content — skip if empty (e.g. only untracked files, no modifications)
+    // Get diff content - skip if empty (e.g. only untracked files, no modifications)
     let diff_all = get_full_diff(&project_dir);
     if diff_all.trim().is_empty() {
         return Ok(());
@@ -148,11 +149,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     save_state(&state_path, &new_state);
 
+    // Extract user's original prompt from transcript
+    let user_prompt = extract_user_prompt(payload.transcript_path.as_deref());
+
     // Build the instruction
     let state_path_str = state_path.to_string_lossy().to_string();
     let config_path = project_dir.join(".claude").join("vibecheck.json");
     let config_path_str = config_path.to_string_lossy().to_string();
-    let reason = build_reason(&files_line, &truncated_diff, &state_path_str, &config_path_str);
+    let reason = build_reason(
+        &files_line,
+        &truncated_diff,
+        &state_path_str,
+        &config_path_str,
+        &user_prompt,
+    );
 
     // Output block decision
     let decision = BlockDecision {
@@ -257,13 +267,15 @@ fn git_cmd_with_timeout(dir: &Path, args: &[&str], timeout_secs: u64) -> Option<
 
 fn get_full_diff(dir: &Path) -> String {
     let unstaged = git_cmd_with_timeout(dir, &["diff", "--unified=3"], 3).unwrap_or_default();
-    let staged = git_cmd_with_timeout(dir, &["diff", "--staged", "--unified=3"], 3).unwrap_or_default();
+    let staged =
+        git_cmd_with_timeout(dir, &["diff", "--staged", "--unified=3"], 3).unwrap_or_default();
     format!("{}{}", unstaged, staged)
 }
 
 fn get_changed_files(dir: &Path) -> Vec<String> {
     let unstaged = git_cmd_with_timeout(dir, &["diff", "--name-only"], 3).unwrap_or_default();
-    let staged = git_cmd_with_timeout(dir, &["diff", "--staged", "--name-only"], 3).unwrap_or_default();
+    let staged =
+        git_cmd_with_timeout(dir, &["diff", "--staged", "--name-only"], 3).unwrap_or_default();
 
     let mut seen = HashSet::new();
     let mut files = Vec::new();
@@ -295,6 +307,61 @@ fn truncate_diff(diff: &str, max_chars: usize) -> String {
     }
 }
 
+fn extract_user_prompt(transcript_path: Option<&str>) -> String {
+    let path = match transcript_path {
+        Some(p) => p,
+        None => return String::new(),
+    };
+
+    // Expand ~ to home directory
+    let expanded = if path.starts_with("~/") {
+        if let Ok(home) = env::var("HOME") {
+            format!("{}{}", home, &path[1..])
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    };
+
+    let content = match fs::read_to_string(&expanded) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+
+    // JSONL format: each line is a JSON object. Find the first user message.
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            if val.get("role").and_then(|r| r.as_str()) == Some("user") {
+                // Extract text content
+                if let Some(content) = val.get("content") {
+                    if let Some(text) = content.as_str() {
+                        let truncated: String = text.chars().take(500).collect();
+                        return truncated;
+                    }
+                    // content might be an array of blocks
+                    if let Some(arr) = content.as_array() {
+                        for block in arr {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                    let truncated: String = text.chars().take(500).collect();
+                                    return truncated;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    String::new()
+}
+
 fn load_state(path: &Path) -> State {
     fs::read_to_string(path)
         .ok()
@@ -308,9 +375,21 @@ fn save_state(path: &Path, state: &State) {
     }
 }
 
-fn build_reason(files_line: &str, diff_snippet: &str, state_path: &str, config_path: &str) -> String {
+fn build_reason(
+    files_line: &str,
+    diff_snippet: &str,
+    state_path: &str,
+    config_path: &str,
+    user_prompt: &str,
+) -> String {
+    let prompt_section = if user_prompt.is_empty() {
+        String::new()
+    } else {
+        format!("\nUser's original prompt:\n{}\n", user_prompt)
+    };
+
     format!(
-r#"You just finished the main task. Now run a quick VibeCheck.
+        r#"You just finished the main task. Now run a quick VibeCheck.
 
 IMPORTANT RULES:
 - Do NOT use Edit, Write, or any code-modifying tools on PROJECT files. This is learning-only.
@@ -331,9 +410,9 @@ STEP 1: Use AskUserQuestion to ask:
 STEP 2: Handle the response:
 - If "No thanks": say "Got it, skipping." then end with [vibecheck:done]
 - If "Snooze 30m": Run this Bash command to persist the snooze, then say "Snoozed for 30 minutes." and end with [vibecheck:done]:
-  python3 -c "import json,time,pathlib; p=pathlib.Path('{state_path}'); d=json.loads(p.read_text()) if p.exists() else {{}}; d['snoozed_until']=int(time.time())+1800; p.write_text(json.dumps(d,indent=2))"
+  python3 -c "import json,time,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['snoozed_until']=int(time.time())+1800; p.write_text(json.dumps(d,indent=2))" '{state_path}'
 - If "Disable": Run this Bash command to persist the disable, then say "VibeCheck disabled. Re-enable by setting enabled:true in .claude/vibecheck.json" and end with [vibecheck:done]:
-  python3 -c "import json,pathlib; p=pathlib.Path('{config_path}'); d=json.loads(p.read_text()) if p.exists() else {{}}; d['enabled']=False; p.write_text(json.dumps(d,indent=2))"
+  python3 -c "import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['enabled']=False; p.write_text(json.dumps(d,indent=2))" '{config_path}'
 - If "Yes (10s)": continue to STEP 3.
 
 STEP 3: Analyze the diff and create ONE multiple-choice question.
@@ -346,12 +425,12 @@ Classify what happened:
 - Was something REMOVED? (capability or safeguard that's now gone)
 - Was it a FIX? (broken thing that now works)
 
-Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products — they need to understand what their product does, not how to read code.
+Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products - they need to understand what their product does, not how to read code.
 
-QUESTION FORMULA — pick one:
+QUESTION FORMULA - pick one:
   * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
   * WHAT'S NEW: "A user tries [action] for the first time. What do they experience?"
-  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before — or what protection is no longer there?"
+  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before - or what protection is no longer there?"
   * SIDE EFFECTS: "This change also affects [related area]. What's different there now?"
   * EDGE CASE: "A user does [unusual but realistic action]. How does your app handle it after this change?"
   * LIMITS: "What's the maximum/minimum [value/count/size] this feature now supports? What happens at the boundary?"
@@ -360,7 +439,7 @@ QUESTION FORMULA — pick one:
 NEVER ASK:
   * About code syntax, language features, or programming concepts
   * About which library or framework is used
-  * Anything a developer would need to read code to answer — the question should be answerable by someone who understands the PRODUCT but not the code
+  * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
   * Generic questions unrelated to this specific diff
 
 WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
@@ -368,20 +447,198 @@ WRONG ANSWERS: Each should be a plausible misunderstanding of what the product c
 Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
 
 STEP 4: After the user answers:
-1. Explain the correct answer in plain language — what the product does now and why
+1. Explain the correct answer in plain language - what the product does now and why
 2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. A PROMPTING TIP: suggest how they could have prompted Claude differently to get a better result or avoid the gap this question exposed. For example: "Next time, try: 'Add rate limiting AND return a friendly error message with a Retry-After header when the limit is hit.'" This helps them write more complete prompts in the future.
+3. PROMPTING TIP: Compare the user's original prompt (provided below) with what was actually built (the diff). If the prompt was vague and the implementation has gaps or surprises the user might not expect, suggest a more specific prompt that would have covered those gaps. If the prompt was already detailed and the implementation matches well, say so - "Your prompt covered this well." Don't fabricate issues.
 
 Then end your message with: [vibecheck:done]
 
 CHANGE CONTEXT:
 Changed files: {files_line}
-
+{prompt_section}
 Diff:
 {diff_snippet}"#,
         files_line = files_line,
+        prompt_section = prompt_section,
         diff_snippet = diff_snippet,
         state_path = state_path,
         config_path = config_path
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as IoWrite;
+
+    #[test]
+    fn truncate_diff_short() {
+        let diff = "hello world";
+        assert_eq!(truncate_diff(diff, 100), "hello world");
+    }
+
+    #[test]
+    fn truncate_diff_long() {
+        let diff = "a".repeat(50);
+        let result = truncate_diff(&diff, 10);
+        assert!(result.starts_with("aaaaaaaaaa"));
+        assert!(result.ends_with("[diff truncated]"));
+    }
+
+    #[test]
+    fn truncate_diff_exact_boundary() {
+        let diff = "a".repeat(10);
+        assert_eq!(truncate_diff(&diff, 10), "a".repeat(10));
+    }
+
+    #[test]
+    fn hash_string_deterministic() {
+        let h1 = hash_string("test");
+        let h2 = hash_string("test");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_string_different_inputs() {
+        let h1 = hash_string("hello");
+        let h2 = hash_string("world");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn load_state_missing_file() {
+        let state = load_state(Path::new("/tmp/nonexistent_vibecheck_state.json"));
+        assert_eq!(state.last_quiz_at, 0);
+        assert_eq!(state.last_diff_hash, "");
+        assert_eq!(state.snoozed_until, 0);
+    }
+
+    #[test]
+    fn save_and_load_state() {
+        let path = std::env::temp_dir().join("vibecheck_test_state.json");
+        let state = State {
+            last_quiz_at: 12345,
+            last_diff_hash: "abc".to_string(),
+            snoozed_until: 99999,
+        };
+        save_state(&path, &state);
+        let loaded = load_state(&path);
+        assert_eq!(loaded.last_quiz_at, 12345);
+        assert_eq!(loaded.last_diff_hash, "abc");
+        assert_eq!(loaded.snoozed_until, 99999);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_config_missing_file() {
+        let cfg = read_config_file(Path::new("/tmp/nonexistent_vibecheck_config.json"));
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn load_config_valid_file() {
+        let path = std::env::temp_dir().join("vibecheck_test_config.json");
+        fs::write(
+            &path,
+            r#"{"enabled": false, "minSecondsBetweenQuizzes": 60}"#,
+        )
+        .unwrap();
+        let cfg = read_config_file(&path).unwrap();
+        assert_eq!(cfg.enabled, Some(false));
+        assert_eq!(cfg.min_seconds_between_quizzes, Some(60));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_user_prompt_missing_file() {
+        let result = extract_user_prompt(Some("/tmp/nonexistent_transcript.jsonl"));
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_user_prompt_none() {
+        let result = extract_user_prompt(None);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_user_prompt_from_jsonl() {
+        let path = std::env::temp_dir().join("vibecheck_test_transcript.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"Add rate limiting"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"role":"assistant","content":"Sure, I'll add rate limiting."}}"#
+        )
+        .unwrap();
+        drop(f);
+
+        let result = extract_user_prompt(Some(path.to_str().unwrap()));
+        assert_eq!(result, "Add rate limiting");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_user_prompt_content_array() {
+        let path = std::env::temp_dir().join("vibecheck_test_transcript2.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"role":"user","content":[{{"type":"text","text":"Build a login page"}}]}}"#
+        )
+        .unwrap();
+        drop(f);
+
+        let result = extract_user_prompt(Some(path.to_str().unwrap()));
+        assert_eq!(result, "Build a login page");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_user_prompt_truncates_long_input() {
+        let path = std::env::temp_dir().join("vibecheck_test_transcript3.jsonl");
+        let long_text = "x".repeat(1000);
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"role":"user","content":"{}"}}"#, long_text).unwrap();
+        drop(f);
+
+        let result = extract_user_prompt(Some(path.to_str().unwrap()));
+        assert_eq!(result.len(), 500);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn build_reason_includes_prompt() {
+        let reason = build_reason(
+            "file.rs",
+            "diff content",
+            "/tmp/state",
+            "/tmp/config",
+            "Add auth",
+        );
+        assert!(reason.contains("Add auth"));
+        assert!(reason.contains("User's original prompt"));
+    }
+
+    #[test]
+    fn build_reason_no_prompt() {
+        let reason = build_reason("file.rs", "diff content", "/tmp/state", "/tmp/config", "");
+        assert!(!reason.contains("User's original prompt"));
+    }
+
+    #[test]
+    fn default_config_values() {
+        let cfg = Config::default();
+        assert_eq!(cfg.enabled, Some(true));
+        assert_eq!(cfg.min_seconds_between_quizzes, Some(900));
+        assert_eq!(cfg.max_diff_chars, Some(2000));
+    }
+
+    #[test]
+    fn payload_deserializes_with_transcript_path() {
+        let json = r#"{"hook_event_name":"Stop","transcript_path":"/tmp/test.jsonl"}"#;
+        let payload: HookPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.hook_event_name.as_deref(), Some("Stop"));
+        assert_eq!(payload.transcript_path.as_deref(), Some("/tmp/test.jsonl"));
+    }
 }

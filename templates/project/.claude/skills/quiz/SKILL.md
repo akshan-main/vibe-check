@@ -21,12 +21,12 @@ Classify what happened:
 - Was something REMOVED? (capability or safeguard that's now gone)
 - Was it a FIX? (broken thing that now works)
 
-Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products — they need to understand what their product does, not how to read code.
+Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products - they need to understand what their product does, not how to read code.
 
-QUESTION FORMULA — pick one:
+QUESTION FORMULA - pick one:
   * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
   * WHAT'S NEW: "A user tries [action] for the first time. What do they experience?"
-  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before — or what protection is no longer there?"
+  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before - or what protection is no longer there?"
   * SIDE EFFECTS: "This change also affects [related area]. What's different there now?"
   * EDGE CASE: "A user does [unusual but realistic action]. How does your app handle it after this change?"
   * LIMITS: "What's the maximum/minimum [value/count/size] this feature now supports? What happens at the boundary?"
@@ -35,7 +35,7 @@ QUESTION FORMULA — pick one:
 NEVER ASK:
   * About code syntax, language features, or programming concepts
   * About which library or framework is used
-  * Anything a developer would need to read code to answer — the question should be answerable by someone who understands the PRODUCT but not the code
+  * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
   * Generic questions unrelated to this specific diff
 
 WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
@@ -43,9 +43,9 @@ WRONG ANSWERS: Each should be a plausible misunderstanding of what the product c
 Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
 
 STEP 3: After the user answers:
-1. Explain the correct answer in plain language — what the product does now and why
+1. Explain the correct answer in plain language - what the product does now and why
 2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. A PROMPTING TIP: suggest how they could have prompted Claude differently to get a better result or avoid the gap this question exposed. For example: "Next time, try: 'Add rate limiting AND return a friendly error message with a Retry-After header when the limit is hit.'" This helps them write more complete prompts in the future.
+3. PROMPTING TIP: Look at the user's earlier messages in this conversation to find the prompt that led to these changes. Compare what they asked for with what was actually built (the diff). If the prompt was vague and the implementation has gaps or surprises, suggest a more specific prompt that would have covered those gaps. If the prompt was already detailed and the implementation matches well, say so - "Your prompt covered this well." Don't fabricate issues.
 
 End your message with: [vibecheck:done]
 
