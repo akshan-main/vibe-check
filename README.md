@@ -16,13 +16,13 @@
 
 ---
 
-You tell Claude to add rate limiting. It does. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
+More and more people are vibe coding but barely know what got built. You say "add rate limiting" and Claude does it. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
 
-VibeCheck asks you stuff like that. One question after Claude finishes a task, based on your actual diff. It reads your original prompt, looks at what was built, and asks if you know what changed in your product. Not code trivia. Not "what does this function do." Just: do you understand what your app does now?
+VibeCheck asks you stuff like that. One question after Claude finishes a task, based on your actual diff. It reads your original prompt, looks at what was built, and checks if you know what changed in your product.
 
-If your prompt was vague and the implementation has gaps you didn't think about, it'll point that out. If your prompt already covered everything, it'll tell you that too.
+If your prompt was vague and the implementation has gaps, it'll point that out. If your prompt already covered everything, it'll tell you that too.
 
-You can skip it every time. No scores. No answers saved. It's just a quick reality check. (A small local state file tracks when the last quiz ran so it doesn't over-trigger.)
+Skip it every time if you want. No scores. No answers saved. Just a quick reality check.
 
 <!-- TODO: Add demo GIF here showing the quiz flow -->
 <!-- ![VibeCheck demo](assets/demo.gif) -->
