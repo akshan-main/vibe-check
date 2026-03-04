@@ -22,7 +22,7 @@
 
 More and more people are vibe coding but barely know what got built. You say "add rate limiting" and your AI does it. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
 
-VibeCheck asks you stuff like that. One question after your AI finishes a task, based on your actual diff. It looks at what was built and checks if you know what changed in your product.
+VibeCheck asks you stuff like that. One question after your AI finishes a task, based on your actual diff. It looks at what was built, compares it to what you asked for, and checks if you know what changed in your product.
 
 Works with any AI coding tool. Native integration with Claude Code (auto-quiz after every task), and a standalone CLI that works with Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider, or anything else that writes code and commits to git.
 
@@ -161,7 +161,7 @@ Claude: "B. The rate limiter returns a 429 with no custom
         when the limit is hit.'"
 ```
 
-Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) reads your git diff, reads your original prompt from the session transcript, and asks one question about what your product actually does now.
+Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) reads your git diff and asks one question about what your product actually does now. Since the quiz runs inside your Claude Code session, it already has the full conversation context - it knows what you asked for and what got built.
 
 ### On-demand (`/quiz`)
 

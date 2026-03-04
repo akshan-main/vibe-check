@@ -18,6 +18,10 @@ struct HookPayload {
     stop_hook_active: Option<bool>,
     last_assistant_message: Option<String>,
     cwd: Option<String>,
+    // Accepted from Claude Code payload but not used - Claude already has
+    // the full conversation context, so extracting a single message from
+    // the transcript would be unreliable.
+    #[allow(dead_code)]
     transcript_path: Option<String>,
 }
 
@@ -245,13 +249,13 @@ fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
     };
     save_state(&state_path, &new_state);
 
-    // Extract user's original prompt from transcript
-    let user_prompt = extract_user_prompt(payload.transcript_path.as_deref());
-
     let difficulty = config.difficulty.as_deref().unwrap_or("normal");
     let track_progress = config.track_progress.unwrap_or(false);
 
     // Build the instruction
+    // No need to extract the user's prompt from transcript - Claude Code already
+    // has the full conversation context. It knows what the user asked and what it
+    // built. Extracting a single message would be unreliable and misleading.
     let state_path_str = state_path.to_string_lossy().to_string();
     let config_path = project_dir.join(".claude").join("vibecheck.json");
     let config_path_str = config_path.to_string_lossy().to_string();
@@ -260,7 +264,6 @@ fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
         &ctx.diff,
         &state_path_str,
         &config_path_str,
-        &user_prompt,
         difficulty,
         track_progress,
         &state,
@@ -801,75 +804,6 @@ fn truncate_diff(diff: &str, max_chars: usize) -> String {
     }
 }
 
-fn extract_user_prompt(transcript_path: Option<&str>) -> String {
-    let path = match transcript_path {
-        Some(p) => p,
-        None => return String::new(),
-    };
-
-    // Expand ~ to home directory
-    let expanded = if path.starts_with("~/") {
-        if let Ok(home) = env::var("HOME") {
-            format!("{}{}", home, &path[1..])
-        } else {
-            path.to_string()
-        }
-    } else {
-        path.to_string()
-    };
-
-    let content = match fs::read_to_string(&expanded) {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-
-    // Use the LAST user message - it's the most recent instruction and most
-    // likely to relate to the current diff. Earlier messages might be about
-    // completely different tasks in the same session.
-    let mut last_user_message = String::new();
-
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            if val.get("role").and_then(|r| r.as_str()) == Some("user") {
-                if let Some(text) = extract_text_from_content(val.get("content")) {
-                    if !text.is_empty() {
-                        last_user_message = text;
-                    }
-                }
-            }
-        }
-    }
-
-    // Truncate to 500 chars
-    last_user_message.chars().take(500).collect()
-}
-
-fn extract_text_from_content(content: Option<&serde_json::Value>) -> Option<String> {
-    let content = content?;
-
-    // String content
-    if let Some(text) = content.as_str() {
-        return Some(text.to_string());
-    }
-
-    // Array of content blocks
-    if let Some(arr) = content.as_array() {
-        for block in arr {
-            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                    return Some(text.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
 fn load_state(path: &Path) -> State {
     fs::read_to_string(path)
         .ok()
@@ -883,23 +817,15 @@ fn save_state(path: &Path, state: &State) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_reason(
     files_line: &str,
     diff_snippet: &str,
     state_path: &str,
     config_path: &str,
-    user_prompt: &str,
     difficulty: &str,
     track_progress: bool,
     state: &State,
 ) -> String {
-    let prompt_section = if user_prompt.is_empty() {
-        String::new()
-    } else {
-        format!("\nUser's original prompt:\n{}\n", user_prompt)
-    };
-
     let difficulty_instruction = match difficulty {
         "beginner" => "\nDIFFICULTY: BEGINNER - Ask about the most obvious, surface-level change. What did the feature add or change that a user would immediately notice? Keep the question simple and the wrong answers clearly wrong.\n",
         "advanced" => "\nDIFFICULTY: ADVANCED - Ask about edge cases, security implications, data flow, or subtle behavior changes that are easy to miss. The wrong answers should be plausible even to someone paying close attention.\n",
@@ -976,17 +902,16 @@ Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskU
 STEP 4: After the user answers:
 1. Explain the correct answer in plain language - what the product does now and why
 2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. PROMPTING TIP: Compare the user's original prompt (provided below) with what was actually built (the diff). If the prompt was vague and the implementation has gaps or surprises the user might not expect, suggest a more specific prompt that would have covered those gaps. If the prompt was already detailed and the implementation matches well, say so - "Your prompt covered this well." Don't fabricate issues.
+3. PROMPTING TIP: You have the full conversation context - you know what the user asked for and what you built. Compare those. If their prompt was vague and the implementation has gaps or surprises they might not expect, suggest a more specific prompt that would have covered those gaps. If their prompt was already detailed and the implementation matches well, say so. Don't fabricate issues.
 
 Then end your message with: [vibecheck:done]
 {tracking_section}
 CHANGE CONTEXT:
 Changed files: {files_line}
-{prompt_section}
+
 Diff:
 {diff_snippet}"#,
         files_line = files_line,
-        prompt_section = prompt_section,
         diff_snippet = diff_snippet,
         state_path = state_path,
         config_path = config_path,
@@ -1002,8 +927,6 @@ Diff:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as IoWrite;
-
     #[test]
     fn truncate_diff_short() {
         let diff = "hello world";
@@ -1089,130 +1012,26 @@ mod tests {
     }
 
     #[test]
-    fn extract_user_prompt_missing_file() {
-        let result = extract_user_prompt(Some("/tmp/nonexistent_transcript.jsonl"));
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn extract_user_prompt_none() {
-        let result = extract_user_prompt(None);
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn extract_user_prompt_from_jsonl() {
-        let path = std::env::temp_dir().join("vibecheck_test_transcript.jsonl");
-        let mut f = fs::File::create(&path).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"Add rate limiting"}}"#).unwrap();
-        writeln!(
-            f,
-            r#"{{"role":"assistant","content":"Sure, I'll add rate limiting."}}"#
-        )
-        .unwrap();
-        drop(f);
-
-        let result = extract_user_prompt(Some(path.to_str().unwrap()));
-        assert_eq!(result, "Add rate limiting");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn extract_user_prompt_content_array() {
-        let path = std::env::temp_dir().join("vibecheck_test_transcript2.jsonl");
-        let mut f = fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r#"{{"role":"user","content":[{{"type":"text","text":"Build a login page"}}]}}"#
-        )
-        .unwrap();
-        drop(f);
-
-        let result = extract_user_prompt(Some(path.to_str().unwrap()));
-        assert_eq!(result, "Build a login page");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn extract_user_prompt_truncates_long_input() {
-        let path = std::env::temp_dir().join("vibecheck_test_transcript3.jsonl");
-        let long_text = "x".repeat(1000);
-        let mut f = fs::File::create(&path).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"{}"}}"#, long_text).unwrap();
-        drop(f);
-
-        let result = extract_user_prompt(Some(path.to_str().unwrap()));
-        assert_eq!(result.len(), 500);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn extract_user_prompt_takes_last_message() {
-        let path = std::env::temp_dir().join("vibecheck_test_transcript4.jsonl");
-        let mut f = fs::File::create(&path).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"Set up the project"}}"#).unwrap();
-        writeln!(f, r#"{{"role":"assistant","content":"Done."}}"#).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"Add rate limiting"}}"#).unwrap();
-        writeln!(f, r#"{{"role":"assistant","content":"Working on it..."}}"#).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"yes do it"}}"#).unwrap();
-        drop(f);
-
-        let result = extract_user_prompt(Some(path.to_str().unwrap()));
-        // Takes the last user message, not the first or all of them
-        assert_eq!(result, "yes do it");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn extract_user_prompt_single_message_still_works() {
-        let path = std::env::temp_dir().join("vibecheck_test_transcript5.jsonl");
-        let mut f = fs::File::create(&path).unwrap();
-        writeln!(f, r#"{{"role":"user","content":"Add auth"}}"#).unwrap();
-        drop(f);
-
-        let result = extract_user_prompt(Some(path.to_str().unwrap()));
-        assert_eq!(result, "Add auth");
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn build_reason_includes_prompt() {
+    fn build_reason_includes_diff() {
         let state = State::default();
         let reason = build_reason(
             "file.rs",
             "diff content",
             "/tmp/state",
             "/tmp/config",
-            "Add auth",
             "normal",
             false,
             &state,
         );
-        assert!(reason.contains("Add auth"));
-        assert!(reason.contains("User's original prompt"));
-    }
-
-    #[test]
-    fn build_reason_no_prompt() {
-        let state = State::default();
-        let reason = build_reason(
-            "file.rs",
-            "diff content",
-            "/tmp/state",
-            "/tmp/config",
-            "",
-            "normal",
-            false,
-            &state,
-        );
-        assert!(!reason.contains("User's original prompt"));
+        assert!(reason.contains("diff content"));
+        assert!(reason.contains("file.rs"));
     }
 
     #[test]
     fn build_reason_beginner_difficulty() {
         let state = State::default();
         let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "beginner", false, &state,
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "beginner", false, &state,
         );
         assert!(reason.contains("BEGINNER"));
     }
@@ -1221,7 +1040,7 @@ mod tests {
     fn build_reason_advanced_difficulty() {
         let state = State::default();
         let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "advanced", false, &state,
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "advanced", false, &state,
         );
         assert!(reason.contains("ADVANCED"));
     }
@@ -1235,7 +1054,7 @@ mod tests {
             ..Default::default()
         };
         let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "", "normal", true, &state,
+            "file.rs", "diff", "/tmp/s", "/tmp/c", "normal", true, &state,
         );
         assert!(reason.contains("PROGRESS TRACKING"));
         assert!(reason.contains("3/5"));
@@ -1252,11 +1071,11 @@ mod tests {
     }
 
     #[test]
-    fn payload_deserializes_with_transcript_path() {
-        let json = r#"{"hook_event_name":"Stop","transcript_path":"/tmp/test.jsonl"}"#;
+    fn payload_deserializes() {
+        let json = r#"{"hook_event_name":"Stop","stop_hook_active":false}"#;
         let payload: HookPayload = serde_json::from_str(json).unwrap();
         assert_eq!(payload.hook_event_name.as_deref(), Some("Stop"));
-        assert_eq!(payload.transcript_path.as_deref(), Some("/tmp/test.jsonl"));
+        assert_eq!(payload.stop_hook_active, Some(false));
     }
 
     // --- New tests for standalone features ---

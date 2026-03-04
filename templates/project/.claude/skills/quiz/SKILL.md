@@ -45,7 +45,7 @@ Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskU
 STEP 3: After the user answers:
 1. Explain the correct answer in plain language - what the product does now and why
 2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. PROMPTING TIP: Look at the user's earlier messages in this conversation to find the prompt that led to these changes. Compare what they asked for with what was actually built (the diff). If the prompt was vague and the implementation has gaps or surprises, suggest a more specific prompt that would have covered those gaps. If the prompt was already detailed and the implementation matches well, say so - "Your prompt covered this well." Don't fabricate issues.
+3. PROMPTING TIP: You have the full conversation context - you know what the user asked for and what you built. Compare those. If their prompt was vague and the implementation has gaps or surprises they might not expect, suggest a more specific prompt that would have covered those gaps. If their prompt was already detailed and the implementation matches well, say so. Don't fabricate issues.
 
 End your message with: [vibecheck:done]
 
