@@ -33,6 +33,7 @@ Arguments:
 Options:
   --global      Install to ~/.claude/ (applies to all projects)
   --skill-only  Only install the /quiz slash command (no auto-trigger hook)
+  --update      Update to the latest version (pulls latest, re-installs)
   --uninstall   Remove VibeCheck
   --help        Show this help message
 
@@ -41,6 +42,7 @@ Examples:
   bash install.sh /path/to/project    # Install in specific project
   bash install.sh --skill-only        # Only the /quiz command, no auto-quiz
   bash install.sh --global            # Install globally
+  bash install.sh --update            # Update to latest version
   bash install.sh --uninstall         # Uninstall from current project
 EOF
 }
@@ -49,6 +51,7 @@ EOF
 GLOBAL=false
 UNINSTALL=false
 SKILL_ONLY=false
+UPDATE=false
 TARGET_DIR="."
 
 while [[ $# -gt 0 ]]; do
@@ -56,6 +59,7 @@ while [[ $# -gt 0 ]]; do
         --global)     GLOBAL=true; shift ;;
         --uninstall)  UNINSTALL=true; shift ;;
         --skill-only) SKILL_ONLY=true; shift ;;
+        --update)     UPDATE=true; shift ;;
         --help|-h)   usage; exit 0 ;;
         -*)          error "Unknown option: $1"; usage; exit 1 ;;
         *)           TARGET_DIR="$1"; shift ;;
@@ -326,6 +330,13 @@ do_install() {
     local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
     mkdir -p "$skill_dir"
     if [[ -f "$template_skill" ]]; then
+        # Back up existing skill if user has customized it
+        if [[ -f "$skill_dir/SKILL.md" ]]; then
+            if ! diff -q "$template_skill" "$skill_dir/SKILL.md" &>/dev/null; then
+                cp "$skill_dir/SKILL.md" "$skill_dir/SKILL.md.bak.$(date +%s)"
+                info "Existing skill backed up (had custom changes)."
+            fi
+        fi
         cp "$template_skill" "$skill_dir/SKILL.md"
         ok "Skill /quiz installed (on-demand quiz)."
     fi
@@ -420,8 +431,18 @@ do_uninstall() {
         ok "State directory removed."
     fi
 
-    # Remove skill
+    # Remove skill (back up if customized)
     if [[ -d "$CLAUDE_DIR/skills/quiz" ]]; then
+        local skill_file="$CLAUDE_DIR/skills/quiz/SKILL.md"
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        local template_skill="$script_dir/../templates/project/.claude/skills/quiz/SKILL.md"
+        if [[ -f "$skill_file" ]] && [[ -f "$template_skill" ]]; then
+            if ! diff -q "$template_skill" "$skill_file" &>/dev/null; then
+                cp "$skill_file" "$CLAUDE_DIR/skills/quiz_SKILL.md.bak.$(date +%s)"
+                info "Custom skill backed up before removal."
+            fi
+        fi
         rm -rf "$CLAUDE_DIR/skills/quiz"
         ok "Skill /quiz removed."
     fi
@@ -443,8 +464,40 @@ do_uninstall() {
     info "Config file left at $CLAUDE_DIR/$CONFIG_NAME (delete manually if desired)."
 }
 
+# ---- Update ----
+do_update() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local repo_root="$script_dir/.."
+
+    if [[ ! -d "$repo_root/.git" ]]; then
+        error "Not a git checkout. Clone the repo first, then run --update."
+        exit 1
+    fi
+
+    info "Pulling latest version..."
+    git -C "$repo_root" pull --ff-only origin main || {
+        error "Failed to pull. You may have local changes. Try: git -C $repo_root pull"
+        exit 1
+    }
+
+    ok "Updated to latest."
+    info "Re-running install..."
+    echo ""
+
+    # Re-run install (without --update to avoid loop)
+    local args=()
+    $GLOBAL && args+=(--global)
+    $SKILL_ONLY && args+=(--skill-only)
+    [[ "$TARGET_DIR" != "$(pwd)" ]] && args+=("$TARGET_DIR")
+
+    bash "$repo_root/install/install.sh" "${args[@]}"
+}
+
 # ---- Main ----
-if $UNINSTALL; then
+if $UPDATE; then
+    do_update
+elif $UNINSTALL; then
     do_uninstall
 else
     do_install

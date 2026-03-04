@@ -173,6 +173,14 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
 
+## Update
+
+```bash
+bash vibe-check/install/install.sh --update
+```
+
+Pulls the latest version and re-installs. Your config (`vibecheck.json`) is preserved. If you customized the `/quiz` skill, it gets backed up before overwriting.
+
 ## Uninstall
 
 ```bash
