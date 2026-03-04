@@ -36,9 +36,7 @@ Skip it every time if you want. No scores. No answers saved. Just a quick realit
 ### Quick install
 
 ```bash
-cargo install vibecheck      # from crates.io
-# or
-brew install akshan-main/tap/vibecheck   # macOS/Linux
+cargo install vibecheck
 ```
 
 Then either use it standalone (`vibecheck quiz`) or set up Claude Code integration below.
