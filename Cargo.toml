@@ -1,0 +1,17 @@
+[package]
+name = "vibecheck"
+version = "0.1.0"
+edition = "2021"
+description = "Diff-native comprehension checkpoints for Claude Code"
+license = "MIT"
+repository = "https://github.com/AkshanKrithick/vibecheck"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
