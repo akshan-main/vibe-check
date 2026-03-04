@@ -1,5 +1,5 @@
 [package]
-name = "vibecheck"
+name = "vibe-check"
 version = "0.2.0"
 edition = "2021"
 description = "Reality checks for vibe coders. One question per diff."
