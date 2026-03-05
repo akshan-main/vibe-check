@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 <details>
 <summary><strong>Manual binary download</strong></summary>
 
-Pre-built binaries are available on the [Releases](https://github.com/akshan-main/vibe-check/releases) page once a version is tagged. Available platforms:
+Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases):
 
 - `vibecheck-darwin-arm64` (macOS Apple Silicon)
 - `vibecheck-darwin-x86_64` (macOS Intel)
@@ -87,8 +87,6 @@ Pre-built binaries are available on the [Releases](https://github.com/akshan-mai
 Put it somewhere on your PATH, then run `vibecheck init` in any project.
 
 > **Windows users**: The bash installer is macOS and Linux only. Use `cargo install vibe-check` and then `vibecheck init` instead.
-
-If no releases are published yet, use `cargo install vibe-check` or build from source.
 
 </details>
 
