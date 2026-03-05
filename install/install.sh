@@ -85,13 +85,13 @@ detect_platform() {
     case "$os" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
-        *)      error "Unsupported OS: $os. Use 'cargo install vibecheck' instead."; exit 1 ;;
+        *)      error "Unsupported OS: $os. Use 'cargo install vibe-check' instead."; exit 1 ;;
     esac
 
     case "$arch" in
         x86_64|amd64)  arch="x86_64" ;;
         arm64|aarch64) arch="arm64" ;;
-        *)             error "Unsupported architecture: $arch. Use 'cargo install vibecheck' instead."; exit 1 ;;
+        *)             error "Unsupported architecture: $arch. Use 'cargo install vibe-check' instead."; exit 1 ;;
     esac
 
     echo "${os}-${arch}"
@@ -115,11 +115,11 @@ download_binary() {
     # Try building from source if cargo is available
     if command -v cargo &>/dev/null; then
         info "Trying cargo install..."
-        cargo install vibecheck 2>/dev/null && return 0
+        cargo install vibe-check 2>/dev/null && return 0
     fi
 
     error "Could not download or build vibecheck."
-    error "Try: cargo install vibecheck"
+    error "Try: cargo install vibe-check"
     exit 1
 }
 

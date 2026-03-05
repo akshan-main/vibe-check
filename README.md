@@ -4,7 +4,7 @@
     <strong>Do you actually know what your app just did?</strong>
   </p>
   <p align="center">
-    One question. Your exact diff. 10 seconds. Skip anytime.
+    One question. Your exact diff. Skip anytime.
   </p>
   <p align="center">
     Works with Claude Code, Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider, and anything that uses git.
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 # Uninstall
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
 
-# Or if you have Rust: cargo install vibecheck
+# Or if you have Rust: cargo install vibe-check
 ```
 
 </details>
@@ -146,7 +146,7 @@ vibecheck remove    # uninstall the hook
 
 ### Why Rust?
 
-VibeCheck is a single static binary. No Python, no Node, no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
+VibeCheck is a single static binary with no runtime dependencies to install. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
 
 ## Team Mode
 

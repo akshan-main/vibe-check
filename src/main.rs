@@ -220,10 +220,12 @@ fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Must have uncommitted changes
+    // Must have tracked changes (ignore untracked-only since git diff won't show them)
     let status = git_cmd(&project_dir, &["status", "--porcelain"])?;
-    let status = status.trim();
-    if status.is_empty() {
+    let has_tracked_changes = status
+        .lines()
+        .any(|l| !l.trim().is_empty() && !l.starts_with("??"));
+    if !has_tracked_changes {
         return Ok(());
     }
 
@@ -279,9 +281,12 @@ fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
     let difficulty = config.difficulty.as_deref().unwrap_or("normal");
     let track_progress = config.track_progress.unwrap_or(false);
 
-    // Detect team mode
-    let team_member_path = get_team_context(&project_dir)
-        .map(|(_, path)| path.to_string_lossy().to_string());
+    // Detect team mode (only active when trackProgress is also on)
+    let team_member_path = if track_progress {
+        get_team_context(&project_dir).map(|(_, path)| path.to_string_lossy().to_string())
+    } else {
+        None
+    };
 
     // Build the instruction
     // No need to extract the user's prompt from transcript - Claude Code already
@@ -458,8 +463,8 @@ fn team_init(team_dir: &Path, args: &[String]) -> Result<(), Box<dyn std::error:
     }
 
     // Parse --name flag
-    let team_name = parse_flag_value(args, "--name")
-        .unwrap_or_else(|| "VibeCheck Team".to_string());
+    let team_name =
+        parse_flag_value(args, "--name").unwrap_or_else(|| "VibeCheck Team".to_string());
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -477,14 +482,14 @@ fn team_init(team_dir: &Path, args: &[String]) -> Result<(), Box<dyn std::error:
 
     println!("Team '{}' initialized.", team_name);
     println!("Directory: .vibecheck-team/");
-    println!("");
+    println!();
     println!("Next steps:");
     println!("  1. Run 'vibecheck team join' to register yourself");
     println!("  2. Commit .vibecheck-team/ to git so your team can see it");
     println!("  3. Each team member runs 'vibecheck team join'");
     println!("  4. Enable progress tracking in .claude/vibecheck.json:");
     println!("     {{\"trackProgress\": true}}");
-    println!("");
+    println!();
     println!("View leaderboard: vibecheck team");
 
     Ok(())
@@ -503,12 +508,16 @@ fn team_join(
     let git_email = git_cmd(project_dir, &["config", "user.email"])?;
     let email = git_email.trim();
     if email.is_empty() {
-        eprintln!("Could not detect git user.email. Set it with: git config user.email you@example.com");
+        eprintln!(
+            "Could not detect git user.email. Set it with: git config user.email you@example.com"
+        );
         std::process::exit(1);
     }
 
     let email_hash = short_hash(email);
-    let member_path = team_dir.join("members").join(format!("{}.json", email_hash));
+    let member_path = team_dir
+        .join("members")
+        .join(format!("{}.json", email_hash));
 
     if member_path.exists() {
         let existing: TeamMember = serde_json::from_str(&fs::read_to_string(&member_path)?)?;
@@ -544,10 +553,10 @@ fn team_join(
     fs::write(&member_path, serde_json::to_string_pretty(&member)?)?;
 
     println!("Joined as '{}' ({})", display_name, email_hash);
-    println!("");
+    println!();
     println!("Make sure trackProgress is enabled in .claude/vibecheck.json:");
     println!("  {{\"trackProgress\": true}}");
-    println!("");
+    println!();
     println!("Your quiz results will appear on the team leaderboard.");
     println!("Commit .vibecheck-team/ to share with your team.");
 
@@ -570,7 +579,7 @@ fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
         for entry in fs::read_dir(&members_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
+            if path.extension().is_some_and(|e| e == "json") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(member) = serde_json::from_str::<TeamMember>(&content) {
                         members.push(member);
@@ -582,7 +591,7 @@ fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     if members.is_empty() {
         println!("{}", config.name);
-        println!("");
+        println!();
         println!("No members yet. Run 'vibecheck team join' to register.");
         return Ok(());
     }
@@ -619,7 +628,7 @@ fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Display
     println!("{}", config.name);
     println!("{}", "=".repeat(config.name.len().max(44)));
-    println!("");
+    println!();
 
     // Header
     println!(
@@ -669,7 +678,7 @@ fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
         " Team average: {:.0}%  |  {} quizzes this week",
         team_avg, team_weekly_total
     );
-    println!("");
+    println!();
 
     Ok(())
 }
@@ -682,7 +691,9 @@ fn team_reset(team_dir: &Path, project_dir: &Path) -> Result<(), Box<dyn std::er
 
     let git_email = git_cmd(project_dir, &["config", "user.email"])?;
     let email_hash = short_hash(git_email.trim());
-    let member_path = team_dir.join("members").join(format!("{}.json", email_hash));
+    let member_path = team_dir
+        .join("members")
+        .join(format!("{}.json", email_hash));
 
     if !member_path.exists() {
         eprintln!("You're not on this team. Run 'vibecheck team join' first.");
@@ -735,7 +746,9 @@ fn get_team_context(project_dir: &Path) -> Option<(String, PathBuf)> {
 
     let git_email = git_cmd(project_dir, &["config", "user.email"]).ok()?;
     let email_hash = short_hash(git_email.trim());
-    let member_path = team_dir.join("members").join(format!("{}.json", email_hash));
+    let member_path = team_dir
+        .join("members")
+        .join(format!("{}.json", email_hash));
 
     if !member_path.exists() {
         return None;
@@ -760,23 +773,17 @@ fn collect_working_context(
     let d4 = dir.to_path_buf();
 
     // Spawn 4 git commands concurrently on native OS threads
-    let h1 = thread::spawn(move || {
-        git_cmd_with_timeout(&d1, &["diff", "--unified=3"], 3).unwrap_or_default()
-    });
-    let h2 = thread::spawn(move || {
-        git_cmd_with_timeout(&d2, &["diff", "--staged", "--unified=3"], 3).unwrap_or_default()
-    });
-    let h3 = thread::spawn(move || {
-        git_cmd_with_timeout(&d3, &["diff", "--name-only"], 3).unwrap_or_default()
-    });
-    let h4 = thread::spawn(move || {
-        git_cmd_with_timeout(&d4, &["diff", "--staged", "--name-only"], 3).unwrap_or_default()
-    });
+    let h1 = thread::spawn(move || git_cmd_with_timeout(&d1, &["diff", "--unified=3"], 3));
+    let h2 =
+        thread::spawn(move || git_cmd_with_timeout(&d2, &["diff", "--staged", "--unified=3"], 3));
+    let h3 = thread::spawn(move || git_cmd_with_timeout(&d3, &["diff", "--name-only"], 3));
+    let h4 =
+        thread::spawn(move || git_cmd_with_timeout(&d4, &["diff", "--staged", "--name-only"], 3));
 
-    let unstaged_diff = h1.join().map_err(|_| "thread panic")?;
-    let staged_diff = h2.join().map_err(|_| "thread panic")?;
-    let unstaged_files = h3.join().map_err(|_| "thread panic")?;
-    let staged_files = h4.join().map_err(|_| "thread panic")?;
+    let unstaged_diff = h1.join().map_err(|_| "thread panic")??;
+    let staged_diff = h2.join().map_err(|_| "thread panic")??;
+    let unstaged_files = h3.join().map_err(|_| "thread panic")??;
+    let staged_files = h4.join().map_err(|_| "thread panic")??;
 
     let raw_diff = format!("{}{}", unstaged_diff, staged_diff);
     let files = dedup_file_list(&unstaged_files, &staged_files);
@@ -795,24 +802,49 @@ fn collect_commit_context(
 ) -> Result<QuizContext, Box<dyn std::error::Error>> {
     use std::thread;
 
+    // Check if HEAD~1 exists (fails on first commit)
+    let has_parent = git_cmd(dir, &["rev-parse", "--verify", "HEAD~1"]).is_ok();
+
     let d1 = dir.to_path_buf();
     let d2 = dir.to_path_buf();
     let d3 = dir.to_path_buf();
 
-    // 3 parallel git commands for committed changes
+    // Use `git show` for commit-only diff (excludes worktree edits).
+    // For first commit, diff against empty tree.
+    let diff_args: Vec<String> = if has_parent {
+        vec!["diff".into(), "HEAD~1..HEAD".into(), "--unified=3".into()]
+    } else {
+        vec![
+            "show".into(),
+            "--format=".into(),
+            "--unified=3".into(),
+            "HEAD".into(),
+        ]
+    };
+    let files_args: Vec<String> = if has_parent {
+        vec!["diff".into(), "HEAD~1..HEAD".into(), "--name-only".into()]
+    } else {
+        vec![
+            "show".into(),
+            "--format=".into(),
+            "--name-only".into(),
+            "HEAD".into(),
+        ]
+    };
+
     let h1 = thread::spawn(move || {
-        git_cmd_with_timeout(&d1, &["diff", "HEAD~1", "--unified=3"], 3).unwrap_or_default()
+        let args: Vec<&str> = diff_args.iter().map(|s| s.as_str()).collect();
+        git_cmd_with_timeout(&d1, &args, 3)
     });
     let h2 = thread::spawn(move || {
-        git_cmd_with_timeout(&d2, &["diff", "HEAD~1", "--name-only"], 3).unwrap_or_default()
+        let args: Vec<&str> = files_args.iter().map(|s| s.as_str()).collect();
+        git_cmd_with_timeout(&d2, &args, 3)
     });
-    let h3 = thread::spawn(move || {
-        git_cmd_with_timeout(&d3, &["log", "-1", "--pretty=%s"], 3).unwrap_or_default()
-    });
+    let h3 = thread::spawn(move || git_cmd_with_timeout(&d3, &["log", "-1", "--pretty=%s"], 3));
 
-    let raw_diff = h1.join().map_err(|_| "thread panic")?;
-    let files_raw = h2.join().map_err(|_| "thread panic")?;
-    let commit_msg = h3.join().map_err(|_| "thread panic")?;
+    let raw_diff = h1.join().map_err(|_| "thread panic")??;
+    let files_raw = h2.join().map_err(|_| "thread panic")??;
+    let commit_msg = h3.join().map_err(|_| "thread panic")??;
 
     let files: Vec<String> = files_raw
         .lines()
@@ -1000,9 +1032,7 @@ fn output_quiz_context(ctx: &QuizContext, summary: &DiffSummary, config: &Config
     println!("```\n");
 
     let difficulty_note = match difficulty {
-        "beginner" => {
-            "Ask about the most obvious, surface-level change the user would notice."
-        }
+        "beginner" => "Ask about the most obvious, surface-level change the user would notice.",
         "advanced" => "Ask about edge cases, security implications, or subtle behavior changes.",
         _ => "Ask about the most important change and its real-world impact on users.",
     };
@@ -1087,37 +1117,53 @@ fn git_cmd(dir: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Erro
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn git_cmd_with_timeout(dir: &Path, args: &[&str], timeout_secs: u64) -> Option<String> {
+fn git_cmd_with_timeout(dir: &Path, args: &[&str], timeout_secs: u64) -> Result<String, String> {
     let mut child = Command::new("git")
         .args(args)
         .current_dir(dir)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
-        .ok()?;
+        .map_err(|e| format!("failed to spawn git: {}", e))?;
 
-    // Simple timeout: try wait, give up after duration
+    // Read stdout on a separate thread to avoid pipe buffer deadlock.
+    // If git produces more than ~64KB, it blocks on write unless we drain.
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        if let Some(mut s) = stdout {
+            let _ = s.read_to_string(&mut out);
+        }
+        out
+    });
+
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let out = reader.join().unwrap_or_default();
                 if status.success() {
-                    let mut out = String::new();
-                    if let Some(mut stdout) = child.stdout.take() {
-                        stdout.read_to_string(&mut out).ok();
-                    }
-                    return Some(out);
+                    return Ok(out);
                 }
-                return None;
+                return Err(format!(
+                    "git {} exited with {}",
+                    args.first().unwrap_or(&""),
+                    status
+                ));
             }
             Ok(None) => {
                 if start.elapsed() > Duration::from_secs(timeout_secs) {
                     let _ = child.kill();
-                    return None;
+                    let _ = reader.join();
+                    return Err(format!(
+                        "git {} timed out after {}s",
+                        args.first().unwrap_or(&""),
+                        timeout_secs
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => return None,
+            Err(e) => return Err(format!("error waiting on git: {}", e)),
         }
     }
 }
@@ -1166,6 +1212,7 @@ fn save_state(path: &Path, state: &State) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_reason(
     files_line: &str,
     diff_snippet: &str,
@@ -1207,7 +1254,7 @@ IMPORTANT RULES:
 - Do NOT use Edit, Write, or any code-modifying tools on PROJECT files. This is learning-only.
 - Quiz answers must NOT influence any further actions or decisions.
 - Keep it quick for the user.
-- You MAY use Bash ONLY for the specific snooze/disable commands shown below.
+- You MAY use Bash ONLY for the specific commands shown below (snooze, disable, stats tracking, team updates).
 
 STEP 1: Use AskUserQuestion to ask:
   question: "VibeCheck: quick comprehension check on what just changed?"
@@ -1425,7 +1472,13 @@ mod tests {
     fn build_reason_with_team() {
         let state = State::default();
         let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "normal", false, &state,
+            "file.rs",
+            "diff",
+            "/tmp/s",
+            "/tmp/c",
+            "normal",
+            false,
+            &state,
             Some("/tmp/team/member.json"),
         );
         assert!(reason.contains("TEAM MODE"));
@@ -1515,7 +1568,8 @@ mod tests {
 
     #[test]
     fn analyze_diff_detects_patterns() {
-        let diff = "+  if auth_token.is_empty() {\n+    return Err(AuthError::Unauthorized);\n+  }\n";
+        let diff =
+            "+  if auth_token.is_empty() {\n+    return Err(AuthError::Unauthorized);\n+  }\n";
         let summary = analyze_diff(diff);
         assert!(summary.has_security_changes);
         assert!(summary.has_error_handling_changes);
@@ -1561,7 +1615,10 @@ mod tests {
 
         // Write a hook file as if init was called
         let marker = "# vibecheck";
-        let content = format!("#!/bin/sh\n\n{}\nvibecheck quiz --commit 2>/dev/null || true\n", marker);
+        let content = format!(
+            "#!/bin/sh\n\n{}\nvibecheck quiz --commit 2>/dev/null || true\n",
+            marker
+        );
         fs::write(&hook_path, &content).unwrap();
 
         // Verify it exists
@@ -1613,8 +1670,15 @@ mod tests {
 
     #[test]
     fn parse_flag_value_found() {
-        let args = vec!["init".to_string(), "--name".to_string(), "My Team".to_string()];
-        assert_eq!(parse_flag_value(&args, "--name"), Some("My Team".to_string()));
+        let args = vec![
+            "init".to_string(),
+            "--name".to_string(),
+            "My Team".to_string(),
+        ];
+        assert_eq!(
+            parse_flag_value(&args, "--name"),
+            Some("My Team".to_string())
+        );
     }
 
     #[test]
@@ -1669,7 +1733,11 @@ mod tests {
 
         let result = team_init(
             &team_dir,
-            &["init".to_string(), "--name".to_string(), "Test Squad".to_string()],
+            &[
+                "init".to_string(),
+                "--name".to_string(),
+                "Test Squad".to_string(),
+            ],
         );
         assert!(result.is_ok());
         assert!(team_dir.join("team.json").exists());

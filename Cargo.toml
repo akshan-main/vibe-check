@@ -10,6 +10,10 @@ keywords = ["claude", "vibe-coding", "developer-tools", "code-review", "comprehe
 categories = ["development-tools", "command-line-utilities"]
 readme = "README.md"
 
+[[bin]]
+name = "vibecheck"
+path = "src/main.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
