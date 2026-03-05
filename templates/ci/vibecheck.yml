@@ -1,0 +1,48 @@
+# .github/workflows/vibecheck.yml
+# Copy this file to your repo's .github/workflows/ directory.
+# Posts a VibeCheck quiz as a PR comment. The PR author answers before merge.
+
+name: VibeCheck
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  vibecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install vibecheck
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Generate quiz
+        id: quiz
+        run: |
+          vibecheck ci --base origin/${{ github.base_ref }} --head ${{ github.sha }} > quiz.md 2>/dev/null || true
+          if [ ! -s quiz.md ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post quiz as PR comment
+        if: steps.quiz.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('quiz.md', 'utf8');
+            if (!body.trim()) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

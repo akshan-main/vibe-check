@@ -12,7 +12,9 @@
   <p align="center">
     <a href="#install">Install</a> &middot;
     <a href="#how-it-works">How It Works</a> &middot;
+    <a href="#modes">Modes</a> &middot;
     <a href="#configure">Configure</a> &middot;
+    <a href="#ci-gate">CI Gate</a> &middot;
     <a href="#team-mode">Team Mode</a> &middot;
     <a href="#update">Update</a> &middot;
     <a href="#faq">FAQ</a>
@@ -30,8 +32,6 @@ Works with any AI coding tool that uses git. Auto-quiz after every commit with a
 
 Skip it every time if you want. No scores. No answers saved. Just a quick reality check.
 
-<!-- TODO: Add demo GIF here showing the quiz flow -->
-<!-- ![VibeCheck demo](assets/demo.gif) -->
 
 ## Install
 
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 <details>
 <summary><strong>Manual binary download</strong></summary>
 
-Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases):
+Pre-built binaries are available on the [Releases](https://github.com/akshan-main/vibe-check/releases) page once a version is tagged. Available platforms:
 
 - `vibecheck-darwin-arm64` (macOS Apple Silicon)
 - `vibecheck-darwin-x86_64` (macOS Intel)
@@ -85,6 +85,10 @@ Grab the latest binary for your platform from [Releases](https://github.com/aksh
 - `vibecheck-windows-x86_64.exe` (Windows)
 
 Put it somewhere on your PATH, then run `vibecheck init` in any project.
+
+> **Windows users**: The bash installer is macOS and Linux only. Use `cargo install vibe-check` and then `vibecheck init` instead.
+
+If no releases are published yet, use `cargo install vibe-check` or build from source.
 
 </details>
 
@@ -146,6 +150,22 @@ vibecheck quiz | llm
 
 The `quiz` command reads your git diff, runs diff analysis (function detection, pattern matching, change summary), and outputs structured quiz context. Paste it into whatever AI tool you use.
 
+### Explain mode
+
+Don't want a quiz? Just get a plain-language walkthrough of what changed:
+
+```bash
+vibecheck explain
+
+# Explain latest commit
+vibecheck explain --commit
+
+# Pipe to any LLM
+vibecheck explain | llm
+```
+
+Set `"hookAction": "explain"` in your config to use explain mode as the default for auto-triggers instead of quizzes.
+
 ### Claude Code bonus features
 
 Claude Code gets a couple extras because of its [hooks system](https://docs.anthropic.com/en/docs/claude-code/hooks):
@@ -157,6 +177,107 @@ Claude Code gets a couple extras because of its [hooks system](https://docs.anth
 ### Why Rust?
 
 VibeCheck is a single static binary with no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
+
+## Modes
+
+Different people need different things. Set your mode and the quiz adapts - trigger sensitivity, question style, and difficulty all change.
+
+```bash
+vibecheck mode              # show current mode
+vibecheck mode developer    # switch modes
+```
+
+| Mode | Who it's for | How it works |
+|------|-------------|--------------|
+| `vibe_coder` | Flow-first builders | Light questions, casual tone. L1 difficulty (what changed). Default mode. |
+| `developer` | Working engineers | Risk-scaled difficulty. Low-risk diffs get L2, high-risk get L3-L4. Verification-focused. |
+| `hardcore` | "I don't trust myself at 2am" | Always L4. Failure modes, rollback plans, security implications. High-risk diffs get a follow-up question. |
+| `learning` | Leveling up | Adaptive difficulty based on your accuracy. Starts easy, escalates as you prove competence. |
+
+Difficulty is based on **what changed, not how much**. A 2-line auth bug is harder than a 500-line refactor. The risk engine looks at file paths and diff content - auth, payments, migrations, public API, dependencies, infra, concurrency, error handling - and scores accordingly.
+
+Or set mode in config:
+```json
+{ "mode": "developer" }
+```
+
+### Stats and weak-area tracking
+
+Track what categories you struggle with:
+
+```bash
+vibecheck stats
+```
+
+```
+vibecheck stats
+
+Overall: 8/12 correct (67%)
+Streak: 3
+
+By category:
+  Category               Score   Quizzes
+  --------------------------------------
+  security                 33%    1/3   <-- weak
+  api                      75%    3/4
+  general                  80%    4/5
+```
+
+Enable tracking in your config:
+```json
+{ "trackProgress": true }
+```
+
+When weak areas are detected (under 60% accuracy with 3+ quizzes), the quiz automatically focuses on building understanding in that area.
+
+## CI Gate
+
+Post a VibeCheck quiz as a PR comment so the author has to think about what they're merging.
+
+```bash
+# Generate quiz markdown for a PR
+vibecheck ci --base origin/main --head HEAD
+
+# Pipe directly to GitHub CLI
+vibecheck ci | gh pr comment --body-file -
+```
+
+### GitHub Actions
+
+Copy `templates/ci/vibecheck.yml` to your repo's `.github/workflows/` directory. It will:
+1. Install vibecheck
+2. Generate a quiz from the PR diff
+3. Post it as a PR comment
+
+Or add the steps to your existing workflow:
+
+```yaml
+- name: Install vibecheck
+  run: |
+    curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | sh
+    echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+- name: Generate quiz
+  id: quiz
+  run: |
+    vibecheck ci --base origin/${{ github.base_ref }} --head ${{ github.sha }} > quiz.md 2>/dev/null || true
+    if [ ! -s quiz.md ]; then echo "skip=true" >> $GITHUB_OUTPUT; fi
+
+- name: Post quiz as PR comment
+  if: steps.quiz.outputs.skip != 'true'
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const fs = require('fs');
+      const body = fs.readFileSync('quiz.md', 'utf8');
+      if (!body.trim()) return;
+      await github.rest.issues.createComment({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: context.issue.number,
+        body: body
+      });
+```
 
 ## Team Mode
 
@@ -204,20 +325,23 @@ Create or edit `.claude/vibecheck.json` in your project root (or `~/.claude/vibe
 ```json
 {
   "enabled": true,
+  "mode": "vibe_coder",
   "minSecondsBetweenQuizzes": 900,
   "maxDiffChars": 2000,
-  "difficulty": "normal",
-  "trackProgress": false
+  "trackProgress": false,
+  "hookAction": "quiz"
 }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Kill switch for auto-quiz (does not affect `/quiz` or `vibecheck quiz`) |
+| `mode` | `"vibe_coder"` | Quiz mode: `vibe_coder`, `developer`, `hardcore`, `learning` |
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
-| `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
-| `trackProgress` | `false` | Set to `true` to track quiz stats locally and on the team leaderboard |
+| `difficulty` | auto | Override difficulty: `"L1"`, `"L2"`, `"L3"`, `"L4"`. Normally set by mode + risk. |
+| `trackProgress` | `false` | Track quiz stats locally and on the team leaderboard. Enables weak-area detection. |
+| `hookAction` | `"quiz"` | What the auto-trigger does: `"quiz"` or `"explain"` |
 
 ## Update
 
@@ -255,7 +379,7 @@ What stays the same:
 <details>
 <summary><strong>Manual binary download</strong></summary>
 
-Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases) and replace the old one wherever you put it.
+Grab the latest binary for your platform from the [Releases](https://github.com/akshan-main/vibe-check/releases) page and replace the old one wherever you put it.
 
 </details>
 
@@ -311,7 +435,7 @@ Yes. Set `minSecondsBetweenQuizzes` in `vibecheck.json`. Default is 900 (15 minu
 <details>
 <summary><strong>Does it store my answers?</strong></summary>
 
-By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` in your config, scores are stored locally in that same state file and optionally synced to your team leaderboard.
+By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` in your config, scores are stored locally in that same state file, per-category accuracy goes in `categories.json`, and stats optionally sync to your team leaderboard.
 </details>
 
 <details>
@@ -338,6 +462,37 @@ Test it:
 ./target/release/vibecheck --help
 ./target/release/vibecheck quiz
 ```
+
+## Security and Privacy
+
+VibeCheck runs entirely on your machine. It never phones home, sends telemetry, or talks to any server.
+
+**What it reads:**
+- Your git diff (via `git diff` and `git show`)
+- Your config at `.claude/vibecheck.json` or `~/.claude/vibecheck.json`
+
+**What it writes:**
+- `.claude/.vibecheck/state.json` - last quiz timestamp, diff hash, and (if `trackProgress` is on) your score
+- `.vibecheck-team/members/<hash>.json` - if team mode is active, stores your display name, a SHA-256 hash of your git email (not the email itself), and quiz stats
+
+Nothing is sent over the network. The install script downloads the binary from GitHub Releases (with SHA-256 checksum verification) and that is the only network call VibeCheck ever makes.
+
+## Limitations
+
+- **Untracked files are invisible.** VibeCheck uses `git diff`, which only sees tracked files. New files that haven't been `git add`-ed won't appear in the quiz.
+- **Large diffs get truncated.** The `maxDiffChars` setting (default 2000) caps how much diff context is sent. If your change is bigger than that, the quiz only covers the first portion.
+- **Bash installer is macOS/Linux only.** Windows users should use `cargo install vibe-check` instead.
+- **Pattern detection is keyword-based.** The security, error handling, and API change flags use simple string matching, not AST parsing. They may flag false positives (e.g., a variable named `error_count`) or miss changes that don't use common keywords.
+
+## Diagnose
+
+If something isn't working, run:
+
+```bash
+vibecheck doctor
+```
+
+This prints your config path, git repo status, team mode status, post-commit hook status, and current config values.
 
 ## Contributing
 

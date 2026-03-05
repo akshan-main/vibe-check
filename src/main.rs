@@ -1,122 +1,19 @@
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+mod config;
+mod diff;
+mod git;
+mod hook;
+mod quiz;
+mod team;
+
 use std::env;
 use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-// ---------------------------------------------------------------------------
-// Structs
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize, Default)]
-struct HookPayload {
-    hook_event_name: Option<String>,
-    stop_hook_active: Option<bool>,
-    last_assistant_message: Option<String>,
-    cwd: Option<String>,
-    // Accepted from Claude Code payload but not used - Claude already has
-    // the full conversation context, so extracting a single message from
-    // the transcript would be unreliable.
-    #[allow(dead_code)]
-    transcript_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Config {
-    enabled: Option<bool>,
-    #[serde(rename = "minSecondsBetweenQuizzes")]
-    min_seconds_between_quizzes: Option<u64>,
-    #[serde(rename = "maxDiffChars")]
-    max_diff_chars: Option<usize>,
-    difficulty: Option<String>,
-    #[serde(rename = "trackProgress")]
-    track_progress: Option<bool>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            enabled: Some(true),
-            min_seconds_between_quizzes: Some(900),
-            max_diff_chars: Some(2000),
-            difficulty: Some("normal".to_string()),
-            track_progress: Some(false),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct State {
-    last_quiz_at: u64,
-    last_diff_hash: String,
-    #[serde(default)]
-    snoozed_until: u64,
-    #[serde(default)]
-    total_quizzes: u64,
-    #[serde(default)]
-    total_correct: u64,
-    #[serde(default)]
-    streak: u64,
-}
-
-#[derive(Serialize)]
-struct BlockDecision {
-    decision: String,
-    reason: String,
-}
-
-struct QuizContext {
-    raw_diff: String,
-    diff: String,
-    files: Vec<String>,
-    commit_msg: String,
-}
-
-struct DiffSummary {
-    lines_added: usize,
-    lines_removed: usize,
-    functions_added: Vec<String>,
-    functions_removed: Vec<String>,
-    has_error_handling_changes: bool,
-    has_security_changes: bool,
-    has_api_changes: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct TeamConfig {
-    name: String,
-    created_at: u64,
-}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-struct TeamMember {
-    name: String,
-    email_hash: String,
-    total_quizzes: u64,
-    total_correct: u64,
-    current_streak: u64,
-    best_streak: u64,
-    weekly_correct: u64,
-    weekly_total: u64,
-    week_start: u64,
-    last_quiz_at: u64,
-    joined_at: u64,
-}
-
-// ---------------------------------------------------------------------------
-// Entry point - CLI routing
-// ---------------------------------------------------------------------------
+use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() <= 1 {
-        // No args: Claude Code Stop hook mode (reads stdin)
-        if run_hook().is_err() {
+        if hook::run_hook().is_err() {
             std::process::exit(0);
         }
         return;
@@ -131,10 +28,15 @@ fn main() {
             print_version();
             Ok(())
         }
-        "init" => init_git_hook(),
-        "remove" => remove_git_hook(),
+        "init" => git::init_git_hook(),
+        "remove" => git::remove_git_hook(),
         "quiz" => run_quiz(&args[2..]),
-        "team" => run_team(&args[2..]),
+        "explain" => run_explain(&args[2..]),
+        "ci" => run_ci(&args[2..]),
+        "team" => team::run_team(&args[2..]),
+        "mode" => run_mode(&args[2..]),
+        "stats" => run_stats(),
+        "doctor" => run_doctor(),
         other => {
             eprintln!("unknown command: {}", other);
             eprintln!("run 'vibecheck --help' for usage");
@@ -155,8 +57,15 @@ fn print_help() {
     println!("  vibecheck              Claude Code Stop hook (reads stdin)");
     println!("  vibecheck quiz         Quiz from uncommitted changes");
     println!("  vibecheck quiz --commit  Quiz from latest commit");
+    println!("  vibecheck explain      Explain changes without a quiz");
+    println!("  vibecheck mode         Show current mode");
+    println!("  vibecheck mode <name>  Set mode (vibe_coder, developer, hardcore, learning)");
+    println!("  vibecheck ci             CI mode: quiz for PR comments");
+    println!("  vibecheck ci --base <ref> --head <ref>");
+    println!("  vibecheck stats        Show your quiz stats and weak areas");
     println!("  vibecheck init         Install git post-commit hook");
     println!("  vibecheck remove       Remove git post-commit hook");
+    println!("  vibecheck doctor       Diagnose your VibeCheck setup");
     println!("  vibecheck team init    Start a team leaderboard for this project");
     println!("  vibecheck team join    Register yourself on the team");
     println!("  vibecheck team         Show the team leaderboard");
@@ -166,6 +75,8 @@ fn print_help() {
     println!("EXAMPLES:");
     println!("  vibecheck quiz | pbcopy     Copy quiz to clipboard");
     println!("  vibecheck quiz | llm        Pipe to any LLM CLI");
+    println!("  vibecheck explain | llm     Get a plain-language explanation");
+    println!("  vibecheck ci | gh pr comment --body-file -");
     println!("  vibecheck init              Auto-quiz after every commit");
     println!("  vibecheck team init         Start tracking team stats\n");
     println!("WORKS WITH:");
@@ -179,157 +90,16 @@ fn print_version() {
     println!("vibecheck {}", env!("CARGO_PKG_VERSION"));
 }
 
-// ---------------------------------------------------------------------------
-// Mode 1: Claude Code Stop hook (existing behavior)
-// ---------------------------------------------------------------------------
-
-fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
-    // Read stdin
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
-    let payload: HookPayload = serde_json::from_str(&input).unwrap_or_default();
-
-    // Guard: must be a Stop event
-    if payload.hook_event_name.as_deref() != Some("Stop") {
-        return Ok(());
-    }
-
-    // Guard: recursion prevention
-    if payload.stop_hook_active.unwrap_or(false) {
-        return Ok(());
-    }
-
-    // Guard: quiz already completed this turn
-    if let Some(ref msg) = payload.last_assistant_message {
-        if msg.contains("[vibecheck:done]") {
-            return Ok(());
-        }
-    }
-
-    // Resolve project directory
-    let project_dir = resolve_project_dir(&payload)?;
-
-    // Load config
-    let config = load_config(&project_dir);
-    if !config.enabled.unwrap_or(true) {
-        return Ok(());
-    }
-
-    // Must be inside a git repo
-    if !is_git_repo(&project_dir) {
-        return Ok(());
-    }
-
-    // Must have tracked changes (ignore untracked-only since git diff won't show them)
-    let status = git_cmd(&project_dir, &["status", "--porcelain"])?;
-    let has_tracked_changes = status
-        .lines()
-        .any(|l| !l.trim().is_empty() && !l.starts_with("??"));
-    if !has_tracked_changes {
-        return Ok(());
-    }
-
-    // Throttle: check time since last quiz
-    let state_dir = project_dir.join(".claude").join(".vibecheck");
-    fs::create_dir_all(&state_dir)?;
-    let state_path = state_dir.join("state.json");
-    let state = load_state(&state_path);
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    // Check snooze
-    if state.snoozed_until > 0 && now < state.snoozed_until {
-        return Ok(());
-    }
-
-    let min_gap = config.min_seconds_between_quizzes.unwrap_or(900);
-    if now.saturating_sub(state.last_quiz_at) < min_gap {
-        return Ok(());
-    }
-
-    // Collect context using parallel git operations
-    let max_chars = config.max_diff_chars.unwrap_or(2000);
-    let ctx = collect_working_context(&project_dir, max_chars)?;
-
-    if ctx.raw_diff.trim().is_empty() {
-        return Ok(());
-    }
-
-    // Throttle: check if diff changed
-    let diff_hash = hash_string(&ctx.raw_diff);
-    if diff_hash == state.last_diff_hash {
-        return Ok(());
-    }
-
-    let files_line = if ctx.files.is_empty() {
-        "(unknown files)".to_string()
-    } else {
-        ctx.files.join(", ")
-    };
-
-    // Update state before outputting (so if Claude crashes, we don't re-quiz)
-    let new_state = State {
-        last_quiz_at: now,
-        last_diff_hash: diff_hash,
-        snoozed_until: 0,
-        total_quizzes: state.total_quizzes,
-        total_correct: state.total_correct,
-        streak: state.streak,
-    };
-    save_state(&state_path, &new_state);
-
-    let difficulty = config.difficulty.as_deref().unwrap_or("normal");
-    let track_progress = config.track_progress.unwrap_or(false);
-
-    // Detect team mode (only active when trackProgress is also on)
-    let team_member_path = if track_progress {
-        get_team_context(&project_dir).map(|(_, path)| path.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
-    // Build the instruction
-    // No need to extract the user's prompt from transcript - Claude Code already
-    // has the full conversation context. It knows what the user asked and what it
-    // built. Extracting a single message would be unreliable and misleading.
-    let state_path_str = state_path.to_string_lossy().to_string();
-    let config_path = project_dir.join(".claude").join("vibecheck.json");
-    let config_path_str = config_path.to_string_lossy().to_string();
-    let reason = build_reason(
-        &files_line,
-        &ctx.diff,
-        &state_path_str,
-        &config_path_str,
-        difficulty,
-        track_progress,
-        &state,
-        team_member_path.as_deref(),
-    );
-
-    // Output block decision
-    let decision = BlockDecision {
-        decision: "block".to_string(),
-        reason,
-    };
-    println!("{}", serde_json::to_string(&decision)?);
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Mode 2: Standalone quiz (works with any editor/AI tool)
-// ---------------------------------------------------------------------------
-
 fn run_quiz(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = find_git_root()?;
-    let config = load_config(&project_dir);
-    let max_chars = config.max_diff_chars.unwrap_or(2000);
+    let project_dir = git::find_git_root()?;
+    let cfg = config::load_config(&project_dir);
+    let max_chars = cfg.max_diff_chars.unwrap_or(2000);
     let use_commit = args.iter().any(|a| a == "--commit");
 
     let ctx = if use_commit {
-        collect_commit_context(&project_dir, max_chars)?
+        quiz::collect_commit_context(&project_dir, max_chars)?
     } else {
-        collect_working_context(&project_dir, max_chars)?
+        quiz::collect_working_context(&project_dir, max_chars)?
     };
 
     if ctx.raw_diff.trim().is_empty() {
@@ -337,1550 +107,270 @@ fn run_quiz(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let summary = analyze_diff(&ctx.raw_diff);
-    output_quiz_context(&ctx, &summary, &config);
+    let state_dir = project_dir.join(".claude").join(".vibecheck");
+    let state = config::load_state(&state_dir.join("state.json"));
+
+    let mut summary = diff::analyze_diff(&ctx.raw_diff);
+    diff::check_file_risks(&ctx.files, &mut summary);
+    let risk = diff::compute_risk_level(&summary);
+    quiz::output_quiz_context(&ctx, &summary, &cfg, risk, &state);
 
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Mode 3: Git hook management
-// ---------------------------------------------------------------------------
+fn run_ci(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = git::find_git_root()?;
+    let cfg = config::load_config(&project_dir);
+    let max_chars = cfg.max_diff_chars.unwrap_or(4000);
 
-fn init_git_hook() -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = find_git_root()?;
-    let hooks_dir = project_dir.join(".git").join("hooks");
-    fs::create_dir_all(&hooks_dir)?;
-    let hook_path = hooks_dir.join("post-commit");
+    let base = team::parse_flag_value(args, "--base")
+        .or_else(|| env::var("GITHUB_BASE_REF").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "HEAD~1".to_string());
 
-    let marker = "# vibecheck";
-    let hook_cmd = "vibecheck quiz --commit 2>/dev/null || true";
-    let block = format!("\n{}\n{}\n", marker, hook_cmd);
+    let head = team::parse_flag_value(args, "--head")
+        .or_else(|| env::var("GITHUB_HEAD_REF").ok().filter(|s| !s.is_empty()))
+        .or_else(|| env::var("GITHUB_SHA").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "HEAD".to_string());
 
-    if hook_path.exists() {
-        let content = fs::read_to_string(&hook_path)?;
-        if content.contains(marker) {
-            println!("vibecheck hook already installed in .git/hooks/post-commit");
-            return Ok(());
-        }
-        // Append to existing hook
-        let mut f = fs::OpenOptions::new().append(true).open(&hook_path)?;
-        use std::io::Write;
-        write!(f, "{}", block)?;
-    } else {
-        fs::write(&hook_path, format!("#!/bin/sh\n{}", block))?;
-    }
+    let (raw_diff, files) = git::git_diff_between(&project_dir, &base, &head)?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-    }
-
-    println!("Installed post-commit hook.");
-    println!("VibeCheck will print quiz context after every commit.");
-    println!("Works with any AI tool - pipe it, paste it, or let your tool read it.");
-    println!("\nRemove with: vibecheck remove");
-
-    Ok(())
-}
-
-fn remove_git_hook() -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = find_git_root()?;
-    let hook_path = project_dir.join(".git").join("hooks").join("post-commit");
-
-    if !hook_path.exists() {
-        println!("no post-commit hook found");
+    if raw_diff.trim().is_empty() && files.is_empty() {
+        eprintln!("no changes between {} and {}", base, head);
         return Ok(());
     }
 
-    let content = fs::read_to_string(&hook_path)?;
-    let marker = "# vibecheck";
-
-    if !content.contains(marker) {
-        println!("vibecheck not found in post-commit hook");
-        return Ok(());
-    }
-
-    // Remove the vibecheck block (marker line + command line)
-    let lines: Vec<&str> = content.lines().collect();
-    let mut new_lines = Vec::new();
-    let mut skip_next = false;
-    for line in &lines {
-        if line.trim() == marker {
-            skip_next = true;
-            continue;
-        }
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        new_lines.push(*line);
-    }
-
-    let new_content = new_lines.join("\n");
-
-    // If only shebang left (or empty), remove the file entirely
-    if new_content.trim().is_empty() || new_content.trim() == "#!/bin/sh" {
-        fs::remove_file(&hook_path)?;
-        println!("Removed post-commit hook.");
-    } else {
-        fs::write(&hook_path, new_content)?;
-        println!("Removed vibecheck from post-commit hook.");
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Mode 4: Team mode
-// ---------------------------------------------------------------------------
-
-fn run_team(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = find_git_root()?;
-    let team_dir = project_dir.join(".vibecheck-team");
-
-    let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
-
-    match subcommand {
-        "init" => team_init(&team_dir, args),
-        "join" => team_join(&team_dir, &project_dir, args),
-        "reset" => team_reset(&team_dir, &project_dir),
-        "" | "stats" => team_stats(&team_dir),
-        other => {
-            eprintln!("unknown team command: {}", other);
-            eprintln!("usage: vibecheck team [init|join|stats|reset]");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn team_init(team_dir: &Path, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if team_dir.join("team.json").exists() {
-        println!("Team already initialized in .vibecheck-team/");
-        println!("Run 'vibecheck team join' to register yourself.");
-        return Ok(());
-    }
-
-    // Parse --name flag
-    let team_name =
-        parse_flag_value(args, "--name").unwrap_or_else(|| "VibeCheck Team".to_string());
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    fs::create_dir_all(team_dir.join("members"))?;
-
-    let config = TeamConfig {
-        name: team_name.clone(),
-        created_at: now,
-    };
-
-    fs::write(
-        team_dir.join("team.json"),
-        serde_json::to_string_pretty(&config)?,
-    )?;
-
-    println!("Team '{}' initialized.", team_name);
-    println!("Directory: .vibecheck-team/");
-    println!();
-    println!("Next steps:");
-    println!("  1. Run 'vibecheck team join' to register yourself");
-    println!("  2. Commit .vibecheck-team/ to git so your team can see it");
-    println!("  3. Each team member runs 'vibecheck team join'");
-    println!("  4. Enable progress tracking in .claude/vibecheck.json:");
-    println!("     {{\"trackProgress\": true}}");
-    println!();
-    println!("View leaderboard: vibecheck team");
-
-    Ok(())
-}
-
-fn team_join(
-    team_dir: &Path,
-    project_dir: &Path,
-    args: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !team_dir.join("team.json").exists() {
-        eprintln!("No team found. Run 'vibecheck team init' first.");
-        std::process::exit(1);
-    }
-
-    let git_email = git_cmd(project_dir, &["config", "user.email"])?;
-    let email = git_email.trim();
-    if email.is_empty() {
-        eprintln!(
-            "Could not detect git user.email. Set it with: git config user.email you@example.com"
-        );
-        std::process::exit(1);
-    }
-
-    let email_hash = short_hash(email);
-    let member_path = team_dir
-        .join("members")
-        .join(format!("{}.json", email_hash));
-
-    if member_path.exists() {
-        let existing: TeamMember = serde_json::from_str(&fs::read_to_string(&member_path)?)?;
-        println!("Already on the team as '{}'.", existing.name);
-        println!("View leaderboard: vibecheck team");
-        return Ok(());
-    }
-
-    // Get display name: --name flag, or git user.name, or email prefix
-    let display_name = parse_flag_value(args, "--name").unwrap_or_else(|| {
-        git_cmd(project_dir, &["config", "user.name"])
-            .map(|n| n.trim().to_string())
-            .unwrap_or_else(|_| email.split('@').next().unwrap_or("unknown").to_string())
-    });
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    let member = TeamMember {
-        name: display_name.clone(),
-        email_hash: email_hash.clone(),
-        total_quizzes: 0,
-        total_correct: 0,
-        current_streak: 0,
-        best_streak: 0,
-        weekly_correct: 0,
-        weekly_total: 0,
-        week_start: now,
-        last_quiz_at: 0,
-        joined_at: now,
-    };
-
-    fs::create_dir_all(team_dir.join("members"))?;
-    fs::write(&member_path, serde_json::to_string_pretty(&member)?)?;
-
-    println!("Joined as '{}' ({})", display_name, email_hash);
-    println!();
-    println!("Make sure trackProgress is enabled in .claude/vibecheck.json:");
-    println!("  {{\"trackProgress\": true}}");
-    println!();
-    println!("Your quiz results will appear on the team leaderboard.");
-    println!("Commit .vibecheck-team/ to share with your team.");
-
-    Ok(())
-}
-
-fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if !team_dir.join("team.json").exists() {
-        eprintln!("No team found. Run 'vibecheck team init' first.");
-        std::process::exit(1);
-    }
-
-    let config: TeamConfig =
-        serde_json::from_str(&fs::read_to_string(team_dir.join("team.json"))?)?;
-
-    let members_dir = team_dir.join("members");
-    let mut members = Vec::new();
-
-    if members_dir.is_dir() {
-        for entry in fs::read_dir(&members_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(member) = serde_json::from_str::<TeamMember>(&content) {
-                        members.push(member);
-                    }
-                }
-            }
-        }
-    }
-
-    if members.is_empty() {
-        println!("{}", config.name);
-        println!();
-        println!("No members yet. Run 'vibecheck team join' to register.");
-        return Ok(());
-    }
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let week_seconds: u64 = 7 * 24 * 3600;
-
-    // Reset weekly stats if needed and compute scores
-    let mut scored: Vec<(f64, TeamMember)> = members
-        .into_iter()
-        .map(|mut m| {
-            // Reset weekly if stale
-            if now.saturating_sub(m.week_start) > week_seconds {
-                m.weekly_correct = 0;
-                m.weekly_total = 0;
-                m.week_start = now;
-            }
-            let score = if m.total_quizzes > 0 {
-                (m.total_correct as f64 / m.total_quizzes as f64) * 100.0
-            } else {
-                0.0
-            };
-            (score, m)
-        })
-        .collect();
-
-    // Sort by: score descending, then total quizzes descending (break ties by volume)
-    scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.1.total_quizzes.cmp(&a.1.total_quizzes))
-    });
-
-    // Display
-    println!("{}", config.name);
-    println!("{}", "=".repeat(config.name.len().max(44)));
-    println!();
-
-    // Header
-    println!(
-        " {:<3} {:<14} {:>6} {:>8} {:>11}",
-        "#", "Name", "Score", "Streak", "This Week"
-    );
-    println!(" {}", "-".repeat(46));
-
-    let mut team_weekly_total: u64 = 0;
-
-    for (i, (score, m)) in scored.iter().enumerate() {
-        let streak_display = if m.current_streak > 0 {
-            format!("{}", m.current_streak)
-        } else {
-            "0".to_string()
-        };
-
-        let weekly_display = if m.weekly_total > 0 {
-            format!("{}/{}", m.weekly_correct, m.weekly_total)
-        } else {
-            "-".to_string()
-        };
-
-        let name_display = if m.name.len() > 14 {
-            format!("{}...", &m.name[..11])
-        } else {
-            m.name.clone()
-        };
-
-        println!(
-            " {:<3} {:<14} {:>5.0}% {:>8} {:>11}",
-            i + 1,
-            name_display,
-            score,
-            streak_display,
-            weekly_display,
-        );
-
-        team_weekly_total += m.weekly_total;
-    }
-
-    println!(" {}", "-".repeat(46));
-
-    // Team average
-    let team_avg: f64 = scored.iter().map(|(s, _)| s).sum::<f64>() / scored.len() as f64;
-    println!(
-        " Team average: {:.0}%  |  {} quizzes this week",
-        team_avg, team_weekly_total
-    );
-    println!();
-
-    Ok(())
-}
-
-fn team_reset(team_dir: &Path, project_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if !team_dir.join("team.json").exists() {
-        eprintln!("No team found.");
-        std::process::exit(1);
-    }
-
-    let git_email = git_cmd(project_dir, &["config", "user.email"])?;
-    let email_hash = short_hash(git_email.trim());
-    let member_path = team_dir
-        .join("members")
-        .join(format!("{}.json", email_hash));
-
-    if !member_path.exists() {
-        eprintln!("You're not on this team. Run 'vibecheck team join' first.");
-        std::process::exit(1);
-    }
-
-    let mut member: TeamMember = serde_json::from_str(&fs::read_to_string(&member_path)?)?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    member.total_quizzes = 0;
-    member.total_correct = 0;
-    member.current_streak = 0;
-    member.best_streak = 0;
-    member.weekly_correct = 0;
-    member.weekly_total = 0;
-    member.week_start = now;
-
-    fs::write(&member_path, serde_json::to_string_pretty(&member)?)?;
-
-    println!("Stats reset for '{}'.", member.name);
-
-    Ok(())
-}
-
-fn short_hash(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let result = format!("{:x}", hasher.finalize());
-    result[..8].to_string()
-}
-
-fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
-    for i in 0..args.len() {
-        if args[i] == flag {
-            return args.get(i + 1).cloned();
-        }
-    }
-    None
-}
-
-// ---------------------------------------------------------------------------
-// Team integration with hook (detects team, includes update instruction)
-// ---------------------------------------------------------------------------
-
-fn get_team_context(project_dir: &Path) -> Option<(String, PathBuf)> {
-    let team_dir = project_dir.join(".vibecheck-team");
-    if !team_dir.join("team.json").exists() {
-        return None;
-    }
-
-    let git_email = git_cmd(project_dir, &["config", "user.email"]).ok()?;
-    let email_hash = short_hash(git_email.trim());
-    let member_path = team_dir
-        .join("members")
-        .join(format!("{}.json", email_hash));
-
-    if !member_path.exists() {
-        return None;
-    }
-
-    Some((email_hash, member_path))
-}
-
-// ---------------------------------------------------------------------------
-// Parallel context collection (leverages Rust's zero-cost threads)
-// ---------------------------------------------------------------------------
-
-fn collect_working_context(
-    dir: &Path,
-    max_chars: usize,
-) -> Result<QuizContext, Box<dyn std::error::Error>> {
-    use std::thread;
-
-    let d1 = dir.to_path_buf();
-    let d2 = dir.to_path_buf();
-    let d3 = dir.to_path_buf();
-    let d4 = dir.to_path_buf();
-
-    // Spawn 4 git commands concurrently on native OS threads
-    let h1 = thread::spawn(move || git_cmd_with_timeout(&d1, &["diff", "--unified=3"], 3));
-    let h2 =
-        thread::spawn(move || git_cmd_with_timeout(&d2, &["diff", "--staged", "--unified=3"], 3));
-    let h3 = thread::spawn(move || git_cmd_with_timeout(&d3, &["diff", "--name-only"], 3));
-    let h4 =
-        thread::spawn(move || git_cmd_with_timeout(&d4, &["diff", "--staged", "--name-only"], 3));
-
-    let unstaged_diff = h1.join().map_err(|_| "thread panic")??;
-    let staged_diff = h2.join().map_err(|_| "thread panic")??;
-    let unstaged_files = h3.join().map_err(|_| "thread panic")??;
-    let staged_files = h4.join().map_err(|_| "thread panic")??;
-
-    let raw_diff = format!("{}{}", unstaged_diff, staged_diff);
-    let files = dedup_file_list(&unstaged_files, &staged_files);
-
-    Ok(QuizContext {
-        diff: truncate_diff(&raw_diff, max_chars),
+    let non_diff_files = quiz::detect_non_diff_files(&files, &raw_diff);
+    let truncated_diff = diff::truncate_diff(&raw_diff, max_chars);
+
+    let ctx = quiz::QuizContext {
+        diff: truncated_diff,
         raw_diff,
         files,
         commit_msg: String::new(),
-    })
+        non_diff_files,
+    };
+
+    let mut summary = diff::analyze_diff(&ctx.raw_diff);
+    diff::check_file_risks(&ctx.files, &mut summary);
+    let risk = diff::compute_risk_level(&summary);
+
+    quiz::output_ci_context(&ctx, &summary, &cfg, risk, &base, &head);
+
+    Ok(())
 }
 
-fn collect_commit_context(
-    dir: &Path,
-    max_chars: usize,
-) -> Result<QuizContext, Box<dyn std::error::Error>> {
-    use std::thread;
+fn run_explain(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = git::find_git_root()?;
+    let cfg = config::load_config(&project_dir);
+    let max_chars = cfg.max_diff_chars.unwrap_or(2000);
+    let use_commit = args.iter().any(|a| a == "--commit");
 
-    // Check if HEAD~1 exists (fails on first commit)
-    let has_parent = git_cmd(dir, &["rev-parse", "--verify", "HEAD~1"]).is_ok();
-
-    let d1 = dir.to_path_buf();
-    let d2 = dir.to_path_buf();
-    let d3 = dir.to_path_buf();
-
-    // Use `git show` for commit-only diff (excludes worktree edits).
-    // For first commit, diff against empty tree.
-    let diff_args: Vec<String> = if has_parent {
-        vec!["diff".into(), "HEAD~1..HEAD".into(), "--unified=3".into()]
+    let ctx = if use_commit {
+        quiz::collect_commit_context(&project_dir, max_chars)?
     } else {
-        vec![
-            "show".into(),
-            "--format=".into(),
-            "--unified=3".into(),
-            "HEAD".into(),
-        ]
-    };
-    let files_args: Vec<String> = if has_parent {
-        vec!["diff".into(), "HEAD~1..HEAD".into(), "--name-only".into()]
-    } else {
-        vec![
-            "show".into(),
-            "--format=".into(),
-            "--name-only".into(),
-            "HEAD".into(),
-        ]
+        quiz::collect_working_context(&project_dir, max_chars)?
     };
 
-    let h1 = thread::spawn(move || {
-        let args: Vec<&str> = diff_args.iter().map(|s| s.as_str()).collect();
-        git_cmd_with_timeout(&d1, &args, 3)
-    });
-    let h2 = thread::spawn(move || {
-        let args: Vec<&str> = files_args.iter().map(|s| s.as_str()).collect();
-        git_cmd_with_timeout(&d2, &args, 3)
-    });
-    let h3 = thread::spawn(move || git_cmd_with_timeout(&d3, &["log", "-1", "--pretty=%s"], 3));
+    if ctx.raw_diff.trim().is_empty() && ctx.non_diff_files.is_empty() {
+        eprintln!("no changes to explain");
+        return Ok(());
+    }
 
-    let raw_diff = h1.join().map_err(|_| "thread panic")??;
-    let files_raw = h2.join().map_err(|_| "thread panic")??;
-    let commit_msg = h3.join().map_err(|_| "thread panic")??;
+    let mut summary = diff::analyze_diff(&ctx.raw_diff);
+    diff::check_file_risks(&ctx.files, &mut summary);
+    let risk = diff::compute_risk_level(&summary);
+    quiz::output_explain_context(&ctx, &summary, &cfg, risk);
 
-    let files: Vec<String> = files_raw
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .take(10)
+    Ok(())
+}
+
+fn run_stats() -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = git::find_git_root()
+        .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let state_dir = project_dir.join(".claude").join(".vibecheck");
+    let state = config::load_state(&state_dir.join("state.json"));
+
+    println!("vibecheck stats\n");
+    println!(
+        "Overall: {}/{} correct ({:.0}%)",
+        state.total_correct,
+        state.total_quizzes,
+        if state.total_quizzes > 0 {
+            state.total_correct as f64 / state.total_quizzes as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!("Streak: {}\n", state.streak);
+
+    let categories_path = state_dir.join("categories.json");
+    if !categories_path.exists() {
+        println!("No category data yet.");
+        println!("Enable trackProgress in .claude/vibecheck.json to start tracking.");
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&categories_path)?;
+    let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&content)?;
+
+    let mut entries: Vec<(String, u64, u64)> = map
+        .iter()
+        .filter_map(|(cat, val)| {
+            let arr = val.as_array()?;
+            let total = arr.first()?.as_u64()?;
+            let correct = arr.get(1)?.as_u64()?;
+            if total > 0 {
+                Some((cat.clone(), total, correct))
+            } else {
+                None
+            }
+        })
         .collect();
 
-    Ok(QuizContext {
-        diff: truncate_diff(&raw_diff, max_chars),
-        raw_diff,
-        files,
-        commit_msg,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Diff analysis (Rust-native pattern detection on raw diff text)
-// ---------------------------------------------------------------------------
-
-fn analyze_diff(diff: &str) -> DiffSummary {
-    let mut summary = DiffSummary {
-        lines_added: 0,
-        lines_removed: 0,
-        functions_added: Vec::new(),
-        functions_removed: Vec::new(),
-        has_error_handling_changes: false,
-        has_security_changes: false,
-        has_api_changes: false,
-    };
-
-    for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            summary.lines_added += 1;
-            let content = &line[1..];
-
-            if let Some(name) = extract_function_name(content) {
-                summary.functions_added.push(name);
-            }
-
-            check_patterns(content, &mut summary);
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            summary.lines_removed += 1;
-            let content = &line[1..];
-
-            if let Some(name) = extract_function_name(content) {
-                summary.functions_removed.push(name);
-            }
-
-            check_patterns(content, &mut summary);
-        }
+    if entries.is_empty() {
+        println!("No category data yet.");
+        return Ok(());
     }
 
-    summary
-}
+    // Sort worst-first
+    entries.sort_by(|a, b| {
+        let acc_a = a.2 as f64 / a.1 as f64;
+        let acc_b = b.2 as f64 / b.1 as f64;
+        acc_a
+            .partial_cmp(&acc_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-fn check_patterns(content: &str, summary: &mut DiffSummary) {
-    let lower = content.to_lowercase();
-    if lower.contains("error")
-        || lower.contains("catch")
-        || lower.contains("except")
-        || lower.contains("panic")
-        || lower.contains("unwrap")
-    {
-        summary.has_error_handling_changes = true;
-    }
-    if lower.contains("auth")
-        || lower.contains("token")
-        || lower.contains("password")
-        || lower.contains("secret")
-        || lower.contains("csrf")
-        || lower.contains("cors")
-        || lower.contains("permission")
-    {
-        summary.has_security_changes = true;
-    }
-    if lower.contains("route")
-        || lower.contains("endpoint")
-        || lower.contains("/api")
-        || lower.contains("handler")
-        || lower.contains("middleware")
-    {
-        summary.has_api_changes = true;
-    }
-}
+    println!("By category:");
+    println!("  {:<20} {:>6}  {:>8}", "Category", "Score", "Quizzes");
+    println!("  {}", "-".repeat(38));
 
-fn extract_function_name(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-
-    // Language-agnostic function detection
-    let patterns: &[(&str, &str)] = &[
-        ("fn ", "("),       // Rust
-        ("def ", "("),      // Python, Ruby
-        ("function ", "("), // JavaScript
-        ("func ", "("),     // Go
-        ("sub ", "("),      // Perl
-    ];
-
-    for &(prefix, suffix) in patterns {
-        if let Some(start) = trimmed.find(prefix) {
-            let after = &trimmed[start + prefix.len()..];
-            if let Some(end) = after.find(suffix) {
-                let name = after[..end].trim();
-                if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-
-    // JS arrow functions: const name = (...) =>
-    if trimmed.contains("=>") {
-        if let Some(eq_pos) = trimmed.find('=') {
-            let before = trimmed[..eq_pos].trim();
-            // Extract last word before =
-            if let Some(name) = before.split_whitespace().last() {
-                if name.chars().all(|c| c.is_alphanumeric() || c == '_') && name.len() > 1 {
-                    return Some(name.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
-// ---------------------------------------------------------------------------
-// Quiz output (structured context for any AI tool)
-// ---------------------------------------------------------------------------
-
-fn output_quiz_context(ctx: &QuizContext, summary: &DiffSummary, config: &Config) {
-    let difficulty = config.difficulty.as_deref().unwrap_or("normal");
-
-    println!("# VibeCheck\n");
-
-    if !ctx.commit_msg.is_empty() {
-        println!("Commit: {}\n", ctx.commit_msg.trim());
-    }
-
-    if !ctx.files.is_empty() {
-        println!("Changed files: {}\n", ctx.files.join(", "));
-    }
-
-    // Structured summary from diff analysis
-    let mut notes = Vec::new();
-    if !summary.functions_added.is_empty() {
-        if summary.functions_added.len() <= 3 {
-            notes.push(format!("New: {}", summary.functions_added.join(", ")));
+    for (cat, total, correct) in &entries {
+        let pct = *correct as f64 / *total as f64 * 100.0;
+        let flag = if pct < 60.0 && *total >= 3 {
+            " <-- weak"
         } else {
-            notes.push(format!("{} functions added", summary.functions_added.len()));
-        }
-    }
-    if !summary.functions_removed.is_empty() {
-        if summary.functions_removed.len() <= 3 {
-            notes.push(format!("Removed: {}", summary.functions_removed.join(", ")));
-        } else {
-            notes.push(format!(
-                "{} functions removed",
-                summary.functions_removed.len()
-            ));
-        }
-    }
-    if summary.has_error_handling_changes {
-        notes.push("Error handling changed".to_string());
-    }
-    if summary.has_security_changes {
-        notes.push("Security-related changes".to_string());
-    }
-    if summary.has_api_changes {
-        notes.push("API/routing changes".to_string());
-    }
-    notes.push(format!(
-        "+{} -{} lines",
-        summary.lines_added, summary.lines_removed
-    ));
-
-    println!("Summary:");
-    for note in &notes {
-        println!("  - {}", note);
+            ""
+        };
+        println!(
+            "  {:<20} {:>5.0}%  {:>3}/{:<3}{}",
+            cat, pct, correct, total, flag
+        );
     }
     println!();
 
-    println!("```diff");
-    println!("{}", ctx.diff);
-    println!("```\n");
+    Ok(())
+}
 
-    let difficulty_note = match difficulty {
-        "beginner" => "Ask about the most obvious, surface-level change the user would notice.",
-        "advanced" => "Ask about edge cases, security implications, or subtle behavior changes.",
-        _ => "Ask about the most important change and its real-world impact on users.",
+fn run_mode(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = git::find_git_root()?;
+    let cfg = config::load_config(&project_dir);
+    let current = cfg.mode.unwrap_or_default();
+
+    if args.is_empty() {
+        println!("Current mode: {}\n", current);
+        println!("Available modes:");
+        println!("  vibe_coder  Flow-first, light questions (default)");
+        println!("  developer   Objective, verification-driven, risk-scaled");
+        println!("  hardcore    Maximum rigor, always hardest questions");
+        println!("  learning    Adaptive difficulty based on your accuracy\n");
+        println!("Set with: vibecheck mode <name>");
+        return Ok(());
+    }
+
+    let input = args[0].to_lowercase();
+    let new_mode = match config::Mode::from_str_strict(&input) {
+        Some(m) => m,
+        None => {
+            eprintln!(
+                "unknown mode: '{}'\nvalid modes: {}",
+                args[0],
+                config::Mode::all_names().join(", ")
+            );
+            std::process::exit(1);
+        }
     };
-
-    println!("## Quiz Instructions\n");
-    println!("Create ONE multiple-choice question (A/B/C/D) about this diff.");
-    println!("{}", difficulty_note);
-    println!("Test whether the developer knows what their PRODUCT does now,");
-    println!("not how the code works. The question should be answerable by");
-    println!("someone who understands the product but hasn't read the code.\n");
-
-    println!("---\n");
-    println!("Pipe this to your AI tool:");
-    println!("  vibecheck quiz | pbcopy        # copy to clipboard");
-    println!("  vibecheck quiz | llm           # pipe to LLM CLI");
-    println!("  vibecheck quiz > .quiz.md      # save for your AI to read");
+    config::set_mode(&project_dir, &new_mode)?;
+    println!("Mode set to: {}", new_mode);
+    Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
+    println!("vibecheck doctor\n");
 
-fn find_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let dir = env::current_dir()?;
-    let output = git_cmd(&dir, &["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(output.trim()))
-}
-
-fn resolve_project_dir(payload: &HookPayload) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Priority: $CLAUDE_PROJECT_DIR > payload.cwd > current dir
-    if let Ok(dir) = env::var("CLAUDE_PROJECT_DIR") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return Ok(p);
-        }
-    }
-    if let Some(ref cwd) = payload.cwd {
-        let p = PathBuf::from(cwd);
-        if p.is_dir() {
-            return Ok(p);
-        }
-    }
-    Ok(env::current_dir()?)
-}
-
-fn load_config(project_dir: &Path) -> Config {
-    // Try project-level first, then global
+    let project_dir = git::find_git_root()
+        .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let project_config = project_dir.join(".claude").join("vibecheck.json");
-    if let Some(cfg) = read_config_file(&project_config) {
-        return cfg;
-    }
-    if let Ok(home) = env::var("HOME") {
-        let global_config = PathBuf::from(home).join(".claude").join("vibecheck.json");
-        if let Some(cfg) = read_config_file(&global_config) {
-            return cfg;
+    let home_config = env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".claude").join("vibecheck.json"))
+        .ok();
+
+    if project_config.exists() {
+        println!("Config: {} (found)", project_config.display());
+    } else if let Some(ref hc) = home_config {
+        if hc.exists() {
+            println!("Config: {} (found, global)", hc.display());
+        } else {
+            println!(
+                "Config: {} (not found, using defaults)",
+                project_config.display()
+            );
         }
-    }
-    Config::default()
-}
-
-fn read_config_file(path: &Path) -> Option<Config> {
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-fn is_git_repo(dir: &Path) -> bool {
-    git_cmd(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok()
-}
-
-fn git_cmd(dir: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
-    let child = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Err("git command failed".into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn git_cmd_with_timeout(dir: &Path, args: &[&str], timeout_secs: u64) -> Result<String, String> {
-    let mut child = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn git: {}", e))?;
-
-    // Read stdout on a separate thread to avoid pipe buffer deadlock.
-    // If git produces more than ~64KB, it blocks on write unless we drain.
-    let stdout = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut out = String::new();
-        if let Some(mut s) = stdout {
-            let _ = s.read_to_string(&mut out);
-        }
-        out
-    });
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = reader.join().unwrap_or_default();
-                if status.success() {
-                    return Ok(out);
-                }
-                return Err(format!(
-                    "git {} exited with {}",
-                    args.first().unwrap_or(&""),
-                    status
-                ));
-            }
-            Ok(None) => {
-                if start.elapsed() > Duration::from_secs(timeout_secs) {
-                    let _ = child.kill();
-                    let _ = reader.join();
-                    return Err(format!(
-                        "git {} timed out after {}s",
-                        args.first().unwrap_or(&""),
-                        timeout_secs
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(format!("error waiting on git: {}", e)),
-        }
-    }
-}
-
-fn dedup_file_list(unstaged: &str, staged: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut files = Vec::new();
-
-    for line in unstaged.lines().chain(staged.lines()) {
-        let f = line.trim();
-        if !f.is_empty() && seen.insert(f.to_string()) {
-            files.push(f.to_string());
-            if files.len() >= 10 {
-                break;
-            }
-        }
-    }
-    files
-}
-
-fn hash_string(s: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-fn truncate_diff(diff: &str, max_chars: usize) -> String {
-    if diff.len() <= max_chars {
-        diff.to_string()
     } else {
-        let truncated: String = diff.chars().take(max_chars).collect();
-        format!("{}\n\n[diff truncated]", truncated)
-    }
-}
-
-fn load_state(path: &Path) -> State {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_state(path: &Path, state: &State) {
-    if let Ok(json) = serde_json::to_string_pretty(state) {
-        let _ = fs::write(path, json);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_reason(
-    files_line: &str,
-    diff_snippet: &str,
-    state_path: &str,
-    config_path: &str,
-    difficulty: &str,
-    track_progress: bool,
-    state: &State,
-    team_member_path: Option<&str>,
-) -> String {
-    let difficulty_instruction = match difficulty {
-        "beginner" => "\nDIFFICULTY: BEGINNER - Ask about the most obvious, surface-level change. What did the feature add or change that a user would immediately notice? Keep the question simple and the wrong answers clearly wrong.\n",
-        "advanced" => "\nDIFFICULTY: ADVANCED - Ask about edge cases, security implications, data flow, or subtle behavior changes that are easy to miss. The wrong answers should be plausible even to someone paying close attention.\n",
-        _ => "",
-    };
-
-    let tracking_section = if track_progress {
-        format!(
-            "\nPROGRESS TRACKING: After the quiz is done (right before [vibecheck:done]), run this Bash command to update stats:\npython3 -c \"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['total_quizzes']=d.get('total_quizzes',0)+1; correct=sys.argv[2]=='1'; d['total_correct']=d.get('total_correct',0)+(1 if correct else 0); d['streak']=(d.get('streak',0)+1) if correct else 0; p.write_text(json.dumps(d,indent=2))\" '{}' {{CORRECT}}\nReplace {{CORRECT}} with 1 if the user answered correctly, 0 if wrong.\nThen show: \"Stats: {{total_correct}}/{{total_quizzes}} correct (streak: {{streak}})\"\nCurrent stats: {}/{} correct, streak: {}\n",
-            state_path, state.total_correct, state.total_quizzes, state.streak
-        )
-    } else {
-        String::new()
-    };
-
-    let team_section = if let Some(member_path) = team_member_path {
-        format!(
-            "\nTEAM MODE: After updating personal stats (or if tracking is off, right before [vibecheck:done]), also update the team leaderboard by running this Bash command:\npython3 -c \"import json,pathlib,time,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['total_quizzes']=d.get('total_quizzes',0)+1; correct=sys.argv[2]=='1'; d['total_correct']=d.get('total_correct',0)+(1 if correct else 0); d['current_streak']=(d.get('current_streak',0)+1) if correct else 0; d['best_streak']=max(d.get('best_streak',0),d.get('current_streak',0)); ws=d.get('week_start',0); now=int(time.time()); d['week_start']=now if now-ws>604800 else ws; d['weekly_total']=(0 if now-ws>604800 else d.get('weekly_total',0))+1; d['weekly_correct']=(0 if now-ws>604800 else d.get('weekly_correct',0))+(1 if correct else 0); d['last_quiz_at']=now; p.write_text(json.dumps(d,indent=2))\" '{}' {{CORRECT}}\nReplace {{CORRECT}} with 1 if the user answered correctly, 0 if wrong (same value as personal tracking).\nThe team leaderboard is visible to the whole team via 'vibecheck team'.\n",
-            member_path
-        )
-    } else {
-        String::new()
-    };
-
-    format!(
-        r#"You just finished the main task. Now run a quick VibeCheck.
-
-IMPORTANT RULES:
-- Do NOT use Edit, Write, or any code-modifying tools on PROJECT files. This is learning-only.
-- Quiz answers must NOT influence any further actions or decisions.
-- Keep it quick for the user.
-- You MAY use Bash ONLY for the specific commands shown below (snooze, disable, stats tracking, team updates).
-
-STEP 1: Use AskUserQuestion to ask:
-  question: "VibeCheck: quick comprehension check on what just changed?"
-  header: "VibeCheck"
-  options:
-    - label: "Yes", description: "One quick question about your changes"
-    - label: "No thanks", description: "Skip this time"
-    - label: "Snooze 30m", description: "Don't ask again for 30 minutes"
-    - label: "Disable", description: "Turn off VibeCheck for this repo"
-  multiSelect: false
-
-STEP 2: Handle the response:
-- If "No thanks": say "Got it, skipping." then end with [vibecheck:done]
-- If "Snooze 30m": Run this Bash command to persist the snooze, then say "Snoozed for 30 minutes." and end with [vibecheck:done]:
-  python3 -c "import json,time,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['snoozed_until']=int(time.time())+1800; p.write_text(json.dumps(d,indent=2))" '{state_path}'
-- If "Disable": Run this Bash command to persist the disable, then say "VibeCheck disabled. Re-enable by setting enabled:true in .claude/vibecheck.json" and end with [vibecheck:done]:
-  python3 -c "import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['enabled']=False; p.write_text(json.dumps(d,indent=2))" '{config_path}'
-- If "Yes (10s)": continue to STEP 3.
-
-STEP 3: Analyze the diff and create ONE multiple-choice question.
-{difficulty_instruction}
-IMPORTANT: Focus on the MOST IMPORTANT change, not the largest one. A 2-line behavior change can matter more than 50 lines of boilerplate. Read the entire diff, use your understanding of the code and the product, and pick the single change that has the most meaningful impact on what users experience. Ignore formatting, imports, renaming, and refactors that don't change behavior.
-
-Classify what happened:
-- Was a feature ADDED? (new capability that didn't exist before)
-- Was a feature CHANGED? (existing behavior now works differently)
-- Was something REMOVED? (capability or safeguard that's now gone)
-- Was it a FIX? (broken thing that now works)
-
-Then ask a question that tests whether the developer understands the REAL-WORLD IMPACT of this specific change on their product. Vibe coders build products - they need to understand what their product does, not how to read code.
-
-QUESTION FORMULA - pick one:
-  * WHAT CHANGED: "Before this change, [X happened]. What happens now instead?"
-  * WHAT'S NEW: "A user tries [action] for the first time. What do they experience?"
-  * WHAT'S GONE: "You removed [feature/check/step]. What can users do now that they couldn't before - or what protection is no longer there?"
-  * SIDE EFFECTS: "This change also affects [related area]. What's different there now?"
-  * EDGE CASE: "A user does [unusual but realistic action]. How does your app handle it after this change?"
-  * LIMITS: "What's the maximum/minimum [value/count/size] this feature now supports? What happens at the boundary?"
-  * DATA: "After this change, what new data is being stored/sent/exposed? Who can see it?"
-
-NEVER ASK:
-  * About code syntax, language features, or programming concepts
-  * About which library or framework is used
-  * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
-  * Generic questions unrelated to this specific diff
-
-WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what was actually built.
-
-Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
-
-STEP 4: After the user answers:
-1. Explain the correct answer in plain language - what the product does now and why
-2. If wrong: explain what they misunderstood about the change and what their answer would have meant for users
-3. PROMPTING TIP: You have the full conversation context - you know what the user asked for and what you built. Compare those. If their prompt was vague and the implementation has gaps or surprises they might not expect, suggest a more specific prompt that would have covered those gaps. If their prompt was already detailed and the implementation matches well, say so. Don't fabricate issues.
-
-Then end your message with: [vibecheck:done]
-{tracking_section}{team_section}
-CHANGE CONTEXT:
-Changed files: {files_line}
-
-Diff:
-{diff_snippet}"#,
-        files_line = files_line,
-        diff_snippet = diff_snippet,
-        state_path = state_path,
-        config_path = config_path,
-        difficulty_instruction = difficulty_instruction,
-        tracking_section = tracking_section,
-        team_section = team_section
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn truncate_diff_short() {
-        let diff = "hello world";
-        assert_eq!(truncate_diff(diff, 100), "hello world");
-    }
-
-    #[test]
-    fn truncate_diff_long() {
-        let diff = "a".repeat(50);
-        let result = truncate_diff(&diff, 10);
-        assert!(result.starts_with("aaaaaaaaaa"));
-        assert!(result.ends_with("[diff truncated]"));
-    }
-
-    #[test]
-    fn truncate_diff_exact_boundary() {
-        let diff = "a".repeat(10);
-        assert_eq!(truncate_diff(&diff, 10), "a".repeat(10));
-    }
-
-    #[test]
-    fn hash_string_deterministic() {
-        let h1 = hash_string("test");
-        let h2 = hash_string("test");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn hash_string_different_inputs() {
-        let h1 = hash_string("hello");
-        let h2 = hash_string("world");
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn load_state_missing_file() {
-        let state = load_state(Path::new("/tmp/nonexistent_vibecheck_state.json"));
-        assert_eq!(state.last_quiz_at, 0);
-        assert_eq!(state.last_diff_hash, "");
-        assert_eq!(state.snoozed_until, 0);
-    }
-
-    #[test]
-    fn save_and_load_state() {
-        let path = std::env::temp_dir().join("vibecheck_test_state.json");
-        let state = State {
-            last_quiz_at: 12345,
-            last_diff_hash: "abc".to_string(),
-            snoozed_until: 99999,
-            total_quizzes: 10,
-            total_correct: 7,
-            streak: 3,
-        };
-        save_state(&path, &state);
-        let loaded = load_state(&path);
-        assert_eq!(loaded.last_quiz_at, 12345);
-        assert_eq!(loaded.last_diff_hash, "abc");
-        assert_eq!(loaded.snoozed_until, 99999);
-        assert_eq!(loaded.total_quizzes, 10);
-        assert_eq!(loaded.total_correct, 7);
-        assert_eq!(loaded.streak, 3);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn load_config_missing_file() {
-        let cfg = read_config_file(Path::new("/tmp/nonexistent_vibecheck_config.json"));
-        assert!(cfg.is_none());
-    }
-
-    #[test]
-    fn load_config_valid_file() {
-        let path = std::env::temp_dir().join("vibecheck_test_config.json");
-        fs::write(
-            &path,
-            r#"{"enabled": false, "minSecondsBetweenQuizzes": 60}"#,
-        )
-        .unwrap();
-        let cfg = read_config_file(&path).unwrap();
-        assert_eq!(cfg.enabled, Some(false));
-        assert_eq!(cfg.min_seconds_between_quizzes, Some(60));
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn build_reason_includes_diff() {
-        let state = State::default();
-        let reason = build_reason(
-            "file.rs",
-            "diff content",
-            "/tmp/state",
-            "/tmp/config",
-            "normal",
-            false,
-            &state,
-            None,
-        );
-        assert!(reason.contains("diff content"));
-        assert!(reason.contains("file.rs"));
-    }
-
-    #[test]
-    fn build_reason_beginner_difficulty() {
-        let state = State::default();
-        let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "beginner", false, &state, None,
-        );
-        assert!(reason.contains("BEGINNER"));
-    }
-
-    #[test]
-    fn build_reason_advanced_difficulty() {
-        let state = State::default();
-        let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "advanced", false, &state, None,
-        );
-        assert!(reason.contains("ADVANCED"));
-    }
-
-    #[test]
-    fn build_reason_with_tracking() {
-        let state = State {
-            total_quizzes: 5,
-            total_correct: 3,
-            streak: 2,
-            ..Default::default()
-        };
-        let reason = build_reason(
-            "file.rs", "diff", "/tmp/s", "/tmp/c", "normal", true, &state, None,
-        );
-        assert!(reason.contains("PROGRESS TRACKING"));
-        assert!(reason.contains("3/5"));
-    }
-
-    #[test]
-    fn build_reason_with_team() {
-        let state = State::default();
-        let reason = build_reason(
-            "file.rs",
-            "diff",
-            "/tmp/s",
-            "/tmp/c",
-            "normal",
-            false,
-            &state,
-            Some("/tmp/team/member.json"),
-        );
-        assert!(reason.contains("TEAM MODE"));
-        assert!(reason.contains("/tmp/team/member.json"));
-    }
-
-    #[test]
-    fn default_config_values() {
-        let cfg = Config::default();
-        assert_eq!(cfg.enabled, Some(true));
-        assert_eq!(cfg.min_seconds_between_quizzes, Some(900));
-        assert_eq!(cfg.max_diff_chars, Some(2000));
-        assert_eq!(cfg.difficulty.as_deref(), Some("normal"));
-        assert_eq!(cfg.track_progress, Some(false));
-    }
-
-    #[test]
-    fn payload_deserializes() {
-        let json = r#"{"hook_event_name":"Stop","stop_hook_active":false}"#;
-        let payload: HookPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(payload.hook_event_name.as_deref(), Some("Stop"));
-        assert_eq!(payload.stop_hook_active, Some(false));
-    }
-
-    // --- New tests for standalone features ---
-
-    #[test]
-    fn extract_function_name_rust() {
-        assert_eq!(
-            extract_function_name("  fn process_payment(amount: f64) {"),
-            Some("process_payment".to_string())
+        println!(
+            "Config: {} (not found, using defaults)",
+            project_config.display()
         );
     }
 
-    #[test]
-    fn extract_function_name_python() {
-        assert_eq!(
-            extract_function_name("  def handle_request(self, req):"),
-            Some("handle_request".to_string())
-        );
-    }
+    let is_repo = git::is_git_repo(&project_dir);
+    println!("Git repo: {}", if is_repo { "yes" } else { "no" });
 
-    #[test]
-    fn extract_function_name_javascript() {
-        assert_eq!(
-            extract_function_name("function validateInput(data) {"),
-            Some("validateInput".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_function_name_go() {
-        assert_eq!(
-            extract_function_name("func ServeHTTP(w http.ResponseWriter, r *http.Request) {"),
-            Some("ServeHTTP".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_function_name_arrow() {
-        assert_eq!(
-            extract_function_name("const fetchUsers = (page) => {"),
-            Some("fetchUsers".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_function_name_not_a_function() {
-        assert_eq!(extract_function_name("  let x = 42;"), None);
-    }
-
-    #[test]
-    fn analyze_diff_counts_lines() {
-        let diff = "+added line 1\n+added line 2\n-removed line\n unchanged\n";
-        let summary = analyze_diff(diff);
-        assert_eq!(summary.lines_added, 2);
-        assert_eq!(summary.lines_removed, 1);
-    }
-
-    #[test]
-    fn analyze_diff_detects_functions() {
-        let diff = "+fn new_feature(x: i32) {\n+  x + 1\n+}\n-fn old_feature() {\n";
-        let summary = analyze_diff(diff);
-        assert_eq!(summary.functions_added, vec!["new_feature"]);
-        assert_eq!(summary.functions_removed, vec!["old_feature"]);
-    }
-
-    #[test]
-    fn analyze_diff_detects_patterns() {
-        let diff =
-            "+  if auth_token.is_empty() {\n+    return Err(AuthError::Unauthorized);\n+  }\n";
-        let summary = analyze_diff(diff);
-        assert!(summary.has_security_changes);
-        assert!(summary.has_error_handling_changes);
-    }
-
-    #[test]
-    fn analyze_diff_detects_api_changes() {
-        let diff = "+router.get('/api/users', handler)\n";
-        let summary = analyze_diff(diff);
-        assert!(summary.has_api_changes);
-    }
-
-    #[test]
-    fn analyze_diff_ignores_diff_headers() {
-        let diff = "+++ b/src/main.rs\n--- a/src/main.rs\n+real line\n-real removed\n";
-        let summary = analyze_diff(diff);
-        assert_eq!(summary.lines_added, 1);
-        assert_eq!(summary.lines_removed, 1);
-    }
-
-    #[test]
-    fn dedup_file_list_merges() {
-        let unstaged = "src/a.rs\nsrc/b.rs\n";
-        let staged = "src/b.rs\nsrc/c.rs\n";
-        let files = dedup_file_list(unstaged, staged);
-        assert_eq!(files, vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
-    }
-
-    #[test]
-    fn dedup_file_list_caps_at_10() {
-        let many = (0..20).map(|i| format!("file{}.rs", i)).collect::<Vec<_>>();
-        let input = many.join("\n");
-        let files = dedup_file_list(&input, "");
-        assert_eq!(files.len(), 10);
-    }
-
-    #[test]
-    fn init_and_remove_git_hook() {
-        let dir = std::env::temp_dir().join("vibecheck_hook_test");
-        let git_dir = dir.join(".git").join("hooks");
-        let _ = fs::create_dir_all(&git_dir);
-        let hook_path = git_dir.join("post-commit");
-
-        // Write a hook file as if init was called
-        let marker = "# vibecheck";
-        let content = format!(
-            "#!/bin/sh\n\n{}\nvibecheck quiz --commit 2>/dev/null || true\n",
-            marker
-        );
-        fs::write(&hook_path, &content).unwrap();
-
-        // Verify it exists
-        let read = fs::read_to_string(&hook_path).unwrap();
-        assert!(read.contains(marker));
-
-        // Simulate remove
-        let lines: Vec<&str> = read.lines().collect();
-        let mut new_lines = Vec::new();
-        let mut skip_next = false;
-        for line in &lines {
-            if line.trim() == marker {
-                skip_next = true;
-                continue;
-            }
-            if skip_next {
-                skip_next = false;
-                continue;
-            }
-            new_lines.push(*line);
+    let team_dir = project_dir.join(".vibecheck-team");
+    let team_active = team_dir.join("team.json").exists();
+    println!(
+        "Team mode: {}",
+        if team_active {
+            "active"
+        } else {
+            "not configured"
         }
-        let new_content = new_lines.join("\n");
-        if new_content.trim().is_empty() || new_content.trim() == "#!/bin/sh" {
-            fs::remove_file(&hook_path).unwrap();
+    );
+
+    let hook_path = project_dir.join(".git").join("hooks").join("post-commit");
+    let hook_installed = hook_path.exists()
+        && fs::read_to_string(&hook_path)
+            .map(|c| c.contains("vibecheck"))
+            .unwrap_or(false);
+    println!(
+        "Post-commit hook: {}",
+        if hook_installed {
+            "installed"
+        } else {
+            "not installed"
         }
+    );
 
-        assert!(!hook_path.exists());
+    let cfg = config::load_config(&project_dir);
+    println!("\nConfig values:");
+    println!("  enabled: {}", cfg.enabled.unwrap_or(true));
+    println!("  mode: {}", cfg.mode.clone().unwrap_or_default());
+    println!(
+        "  minSecondsBetweenQuizzes: {}",
+        cfg.min_seconds_between_quizzes.unwrap_or(900)
+    );
+    println!("  maxDiffChars: {}", cfg.max_diff_chars.unwrap_or(2000));
+    println!(
+        "  difficulty: {}",
+        cfg.difficulty
+            .as_deref()
+            .unwrap_or("auto (based on mode + risk)")
+    );
+    println!("  trackProgress: {}", cfg.track_progress.unwrap_or(false));
+    println!(
+        "  hookAction: {}",
+        cfg.hook_action.as_deref().unwrap_or("quiz")
+    );
 
-        // Cleanup
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    // --- Team mode tests ---
-
-    #[test]
-    fn short_hash_deterministic() {
-        let h1 = short_hash("test@example.com");
-        let h2 = short_hash("test@example.com");
-        assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 8);
-    }
-
-    #[test]
-    fn short_hash_different_inputs() {
-        let h1 = short_hash("alice@example.com");
-        let h2 = short_hash("bob@example.com");
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn parse_flag_value_found() {
-        let args = vec![
-            "init".to_string(),
-            "--name".to_string(),
-            "My Team".to_string(),
-        ];
-        assert_eq!(
-            parse_flag_value(&args, "--name"),
-            Some("My Team".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_flag_value_not_found() {
-        let args = vec!["init".to_string()];
-        assert_eq!(parse_flag_value(&args, "--name"), None);
-    }
-
-    #[test]
-    fn team_config_serialization() {
-        let config = TeamConfig {
-            name: "Test Team".to_string(),
-            created_at: 12345,
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: TeamConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.name, "Test Team");
-        assert_eq!(parsed.created_at, 12345);
-    }
-
-    #[test]
-    fn team_member_serialization() {
-        let member = TeamMember {
-            name: "Alice".to_string(),
-            email_hash: "a1b2c3d4".to_string(),
-            total_quizzes: 10,
-            total_correct: 8,
-            current_streak: 3,
-            best_streak: 5,
-            weekly_correct: 2,
-            weekly_total: 3,
-            week_start: 100,
-            last_quiz_at: 200,
-            joined_at: 50,
-        };
-        let json = serde_json::to_string_pretty(&member).unwrap();
-        let parsed: TeamMember = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.name, "Alice");
-        assert_eq!(parsed.total_quizzes, 10);
-        assert_eq!(parsed.total_correct, 8);
-        assert_eq!(parsed.current_streak, 3);
-        assert_eq!(parsed.best_streak, 5);
-        assert_eq!(parsed.weekly_correct, 2);
-        assert_eq!(parsed.weekly_total, 3);
-    }
-
-    #[test]
-    fn team_init_creates_structure() {
-        let dir = std::env::temp_dir().join("vibecheck_team_init_test");
-        let _ = fs::remove_dir_all(&dir);
-        let team_dir = dir.join(".vibecheck-team");
-
-        let result = team_init(
-            &team_dir,
-            &[
-                "init".to_string(),
-                "--name".to_string(),
-                "Test Squad".to_string(),
-            ],
-        );
-        assert!(result.is_ok());
-        assert!(team_dir.join("team.json").exists());
-        assert!(team_dir.join("members").is_dir());
-
-        let config: TeamConfig =
-            serde_json::from_str(&fs::read_to_string(team_dir.join("team.json")).unwrap()).unwrap();
-        assert_eq!(config.name, "Test Squad");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn team_stats_empty_team() {
-        let dir = std::env::temp_dir().join("vibecheck_team_stats_empty");
-        let _ = fs::remove_dir_all(&dir);
-        let team_dir = dir.join(".vibecheck-team");
-        fs::create_dir_all(team_dir.join("members")).unwrap();
-
-        let config = TeamConfig {
-            name: "Empty Team".to_string(),
-            created_at: 12345,
-        };
-        fs::write(
-            team_dir.join("team.json"),
-            serde_json::to_string(&config).unwrap(),
-        )
-        .unwrap();
-
-        let result = team_stats(&team_dir);
-        assert!(result.is_ok());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn team_stats_with_members() {
-        let dir = std::env::temp_dir().join("vibecheck_team_stats_members");
-        let _ = fs::remove_dir_all(&dir);
-        let team_dir = dir.join(".vibecheck-team");
-        fs::create_dir_all(team_dir.join("members")).unwrap();
-
-        let config = TeamConfig {
-            name: "Stat Team".to_string(),
-            created_at: 12345,
-        };
-        fs::write(
-            team_dir.join("team.json"),
-            serde_json::to_string(&config).unwrap(),
-        )
-        .unwrap();
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let member1 = TeamMember {
-            name: "Alice".to_string(),
-            email_hash: "aaaa1111".to_string(),
-            total_quizzes: 10,
-            total_correct: 8,
-            current_streak: 3,
-            best_streak: 5,
-            weekly_correct: 2,
-            weekly_total: 3,
-            week_start: now,
-            last_quiz_at: now,
-            joined_at: now - 1000,
-        };
-        let member2 = TeamMember {
-            name: "Bob".to_string(),
-            email_hash: "bbbb2222".to_string(),
-            total_quizzes: 5,
-            total_correct: 3,
-            current_streak: 0,
-            best_streak: 2,
-            weekly_correct: 1,
-            weekly_total: 2,
-            week_start: now,
-            last_quiz_at: now,
-            joined_at: now - 500,
-        };
-
-        fs::write(
-            team_dir.join("members").join("aaaa1111.json"),
-            serde_json::to_string_pretty(&member1).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            team_dir.join("members").join("bbbb2222.json"),
-            serde_json::to_string_pretty(&member2).unwrap(),
-        )
-        .unwrap();
-
-        let result = team_stats(&team_dir);
-        assert!(result.is_ok());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn team_reset_clears_stats() {
-        let dir = std::env::temp_dir().join("vibecheck_team_reset_test");
-        let _ = fs::remove_dir_all(&dir);
-        let team_dir = dir.join(".vibecheck-team");
-        fs::create_dir_all(team_dir.join("members")).unwrap();
-
-        let member = TeamMember {
-            name: "Charlie".to_string(),
-            email_hash: "cccc3333".to_string(),
-            total_quizzes: 20,
-            total_correct: 15,
-            current_streak: 5,
-            best_streak: 10,
-            weekly_correct: 3,
-            weekly_total: 4,
-            week_start: 100,
-            last_quiz_at: 200,
-            joined_at: 50,
-        };
-        let member_path = team_dir.join("members").join("cccc3333.json");
-        fs::write(&member_path, serde_json::to_string_pretty(&member).unwrap()).unwrap();
-
-        // Read back, reset manually (simulating what team_reset does)
-        let mut loaded: TeamMember =
-            serde_json::from_str(&fs::read_to_string(&member_path).unwrap()).unwrap();
-        loaded.total_quizzes = 0;
-        loaded.total_correct = 0;
-        loaded.current_streak = 0;
-        loaded.best_streak = 0;
-        loaded.weekly_correct = 0;
-        loaded.weekly_total = 0;
-        fs::write(&member_path, serde_json::to_string_pretty(&loaded).unwrap()).unwrap();
-
-        let reloaded: TeamMember =
-            serde_json::from_str(&fs::read_to_string(&member_path).unwrap()).unwrap();
-        assert_eq!(reloaded.total_quizzes, 0);
-        assert_eq!(reloaded.total_correct, 0);
-        assert_eq!(reloaded.current_streak, 0);
-        assert_eq!(reloaded.best_streak, 0);
-        assert_eq!(reloaded.name, "Charlie"); // name preserved
-
-        let _ = fs::remove_dir_all(&dir);
-    }
+    Ok(())
 }

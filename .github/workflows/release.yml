@@ -78,6 +78,17 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum \
+            vibecheck-darwin-x86_64/vibecheck-darwin-x86_64 \
+            vibecheck-darwin-arm64/vibecheck-darwin-arm64 \
+            vibecheck-linux-x86_64/vibecheck-linux-x86_64 \
+            vibecheck-linux-arm64/vibecheck-linux-arm64 \
+            vibecheck-windows-x86_64.exe/vibecheck-windows-x86_64.exe \
+          | sed 's|[^ ]*/||' > ../SHA256SUMS
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -87,4 +98,5 @@ jobs:
             artifacts/vibecheck-linux-x86_64/vibecheck-linux-x86_64
             artifacts/vibecheck-linux-arm64/vibecheck-linux-arm64
             artifacts/vibecheck-windows-x86_64.exe/vibecheck-windows-x86_64.exe
+            SHA256SUMS
           generate_release_notes: true

@@ -34,6 +34,7 @@ Options:
   --global      Install to ~/.claude/ (applies to all projects)
   --skill-only  Only install the /quiz slash command (no auto-trigger hook)
   --update      Update binary and skill, keep your config
+  --version TAG Pin to a specific release (e.g. --version v0.2.0)
   --uninstall   Remove VibeCheck
   --help        Show this help message
 
@@ -53,6 +54,7 @@ GLOBAL=false
 UNINSTALL=false
 UPDATE=false
 SKILL_ONLY=false
+PIN_VERSION=""
 TARGET_DIR="."
 
 while [[ $# -gt 0 ]]; do
@@ -61,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         --uninstall)  UNINSTALL=true; shift ;;
         --update)     UPDATE=true; shift ;;
         --skill-only) SKILL_ONLY=true; shift ;;
+        --version)    PIN_VERSION="$2"; shift 2 ;;
         --help|-h)    usage; exit 0 ;;
         -*)           error "Unknown option: $1"; usage; exit 1 ;;
         *)            TARGET_DIR="$1"; shift ;;
@@ -104,9 +107,18 @@ detect_platform() {
 download_binary() {
     local platform="$1"
     local dest="$2"
-    local url="https://github.com/${REPO}/releases/latest/download/vibecheck-${platform}"
+    local base_url
 
-    info "Downloading vibecheck for ${platform}..."
+    if [[ -n "$PIN_VERSION" ]]; then
+        base_url="https://github.com/${REPO}/releases/download/${PIN_VERSION}"
+        info "Downloading vibecheck ${PIN_VERSION} for ${platform}..."
+    else
+        base_url="https://github.com/${REPO}/releases/latest/download"
+        info "Downloading vibecheck (latest) for ${platform}..."
+    fi
+
+    local url="${base_url}/vibecheck-${platform}"
+
     if curl -fsSL --retry 3 -o "$dest" "$url" 2>/dev/null; then
         chmod +x "$dest"
         ok "Binary downloaded."
@@ -124,6 +136,57 @@ download_binary() {
     error "Could not download or build vibecheck."
     error "Try: cargo install vibe-check"
     exit 1
+}
+
+# ---- Verify checksum ----
+verify_checksum() {
+    local platform="$1"
+    local binary_path="$2"
+    local base_url
+
+    if [[ -n "$PIN_VERSION" ]]; then
+        base_url="https://github.com/${REPO}/releases/download/${PIN_VERSION}"
+    else
+        base_url="https://github.com/${REPO}/releases/latest/download"
+    fi
+
+    local sums_url="${base_url}/SHA256SUMS"
+    local sums_file
+    sums_file="$(mktemp)"
+
+    if ! curl -fsSL --retry 3 -o "$sums_file" "$sums_url" 2>/dev/null; then
+        warn "Could not download SHA256SUMS. Skipping verification."
+        rm -f "$sums_file"
+        return 0
+    fi
+
+    local expected
+    expected=$(grep "vibecheck-${platform}" "$sums_file" | awk '{print $1}')
+    rm -f "$sums_file"
+
+    if [[ -z "$expected" ]]; then
+        warn "No checksum found for vibecheck-${platform}. Skipping."
+        return 0
+    fi
+
+    local actual
+    if command -v sha256sum &>/dev/null; then
+        actual=$(sha256sum "$binary_path" | awk '{print $1}')
+    elif command -v shasum &>/dev/null; then
+        actual=$(shasum -a 256 "$binary_path" | awk '{print $1}')
+    else
+        warn "Neither sha256sum nor shasum found. Skipping verification."
+        return 0
+    fi
+
+    if [[ "$expected" != "$actual" ]]; then
+        error "Checksum mismatch! Expected $expected, got $actual"
+        error "The downloaded binary may be corrupted or tampered with."
+        rm -f "$binary_path"
+        exit 1
+    fi
+
+    ok "Checksum verified."
 }
 
 # ---- Embedded config (no repo clone needed) ----
@@ -392,6 +455,7 @@ do_install() {
     local platform
     platform="$(detect_platform)"
     download_binary "$platform" "$binary_dest"
+    verify_checksum "$platform" "$binary_dest"
 
     # Config (don't overwrite)
     if [[ ! -f "$CLAUDE_DIR/$CONFIG_NAME" ]]; then
@@ -469,6 +533,7 @@ do_update() {
     local platform
     platform="$(detect_platform)"
     download_binary "$platform" "$binary_dest"
+    verify_checksum "$platform" "$binary_dest"
 
     # Update skill (ask before overwriting)
     local skill_dir="$CLAUDE_DIR/skills/quiz"
@@ -486,6 +551,25 @@ do_update() {
         write_skill "$skill_dir/SKILL.md"
         ok "Skill /quiz installed."
     fi
+
+    # Ensure .gitignore is set up
+    local gitignore="$CLAUDE_DIR/.gitignore"
+    if [[ -f "$gitignore" ]]; then
+        if ! grep -qxF ".vibecheck/" "$gitignore" 2>/dev/null; then
+            echo ".vibecheck/" >> "$gitignore"
+        fi
+    else
+        echo ".vibecheck/" > "$gitignore"
+    fi
+
+    # Ensure settings.json hook is registered
+    local hook_command
+    if $GLOBAL; then
+        hook_command="\$HOME/.claude/hooks/vibecheck"
+    else
+        hook_command="\$CLAUDE_PROJECT_DIR/.claude/hooks/vibecheck"
+    fi
+    merge_settings "$SETTINGS_FILE" "$hook_command"
 
     echo ""
     ok "VibeCheck updated! Your vibecheck.json config was not changed."
