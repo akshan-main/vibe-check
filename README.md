@@ -226,9 +226,9 @@ Enable tracking in your config:
 { "trackProgress": true }
 ```
 
-Auto-tracking works in the Claude Code Stop hook. For other tools, `vibecheck quiz` includes tracking instructions in the output that your AI tool can execute.
+Auto-tracking and weak-area adaptation work in the Claude Code Stop hook. For other tools (git hook, manual `vibecheck quiz`), the quiz output is context-only - stats are not tracked automatically.
 
-When weak areas are detected (under 60% accuracy with 3+ quizzes), the Claude Code hook automatically focuses questions on building understanding in that area.
+When weak areas are detected (under 60% accuracy with 3+ quizzes in Claude Code), the hook automatically focuses questions on building understanding in that area.
 
 ## CI Gate
 
@@ -435,7 +435,7 @@ Yes. Set `minSecondsBetweenQuizzes` in `vibecheck.json`. Default is 900 (15 minu
 <details>
 <summary><strong>Does it store my answers?</strong></summary>
 
-By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` in your config, scores are stored locally in that same state file, per-category accuracy goes in `categories.json`, and stats optionally sync to your team leaderboard.
+By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` and use the Claude Code Stop hook, scores are stored locally in that same state file, per-category accuracy goes in `categories.json`, and stats optionally sync to your team leaderboard.
 </details>
 
 <details>

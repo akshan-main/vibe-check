@@ -20,6 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install vibecheck
+        # For ARM runners, change vibecheck-linux-x86_64 to vibecheck-linux-arm64
         run: |
           curl -fsSL https://github.com/akshan-main/vibe-check/releases/latest/download/vibecheck-linux-x86_64 -o /usr/local/bin/vibecheck
           chmod +x /usr/local/bin/vibecheck
