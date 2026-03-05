@@ -33,6 +33,7 @@ Arguments:
 Options:
   --global      Install to ~/.claude/ (applies to all projects)
   --skill-only  Only install the /quiz slash command (no auto-trigger hook)
+  --update      Update binary and skill, keep your config
   --uninstall   Remove VibeCheck
   --help        Show this help message
 
@@ -50,6 +51,7 @@ EOF
 # ---- Argument parsing ----
 GLOBAL=false
 UNINSTALL=false
+UPDATE=false
 SKILL_ONLY=false
 TARGET_DIR="."
 
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --global)     GLOBAL=true; shift ;;
         --uninstall)  UNINSTALL=true; shift ;;
+        --update)     UPDATE=true; shift ;;
         --skill-only) SKILL_ONLY=true; shift ;;
         --help|-h)    usage; exit 0 ;;
         -*)           error "Unknown option: $1"; usage; exit 1 ;;
@@ -456,9 +459,43 @@ do_uninstall() {
     ok "VibeCheck uninstalled."
 }
 
+# ---- Update (binary + skill only) ----
+do_update() {
+    info "Updating VibeCheck..."
+
+    # Update binary
+    mkdir -p "$HOOKS_DIR"
+    local binary_dest="$HOOKS_DIR/$BINARY_NAME"
+    local platform
+    platform="$(detect_platform)"
+    download_binary "$platform" "$binary_dest"
+
+    # Update skill (ask before overwriting)
+    local skill_dir="$CLAUDE_DIR/skills/quiz"
+    mkdir -p "$skill_dir"
+    if [[ -f "$skill_dir/SKILL.md" ]]; then
+        printf "${YELLOW}[vibecheck]${NC} Overwrite SKILL.md with latest version? [y/N] "
+        read -r answer
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+            write_skill "$skill_dir/SKILL.md"
+            ok "Skill /quiz updated."
+        else
+            info "Skill kept as-is."
+        fi
+    else
+        write_skill "$skill_dir/SKILL.md"
+        ok "Skill /quiz installed."
+    fi
+
+    echo ""
+    ok "VibeCheck updated! Your vibecheck.json config was not changed."
+}
+
 # ---- Main ----
 if $UNINSTALL; then
     do_uninstall
+elif $UPDATE; then
+    do_update
 else
     do_install
 fi

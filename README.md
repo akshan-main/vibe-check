@@ -14,6 +14,7 @@
     <a href="#how-it-works">How It Works</a> &middot;
     <a href="#works-with-any-ai-tool">Any AI Tool</a> &middot;
     <a href="#configure">Configure</a> &middot;
+    <a href="#update">Update</a> &middot;
     <a href="#faq">FAQ</a>
   </p>
 </p>
@@ -33,7 +34,7 @@ Skip it every time if you want. No scores. No answers saved. Just a quick realit
 
 ## Install
 
-One command. No dependencies. Downloads a pre-built binary and wires everything up.
+One command. Downloads a pre-built binary and wires everything up.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash
@@ -50,6 +51,9 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 
 # Only the /quiz command, no auto-trigger
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --skill-only
+
+# Update (keeps your config)
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --update
 
 # Uninstall
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
@@ -72,7 +76,7 @@ Claude: *writes code, finishes task*
   ┌─────────────────────────────────────────────────┐
   │  VibeCheck: quick check on what just changed?    │
   │                                                 │
-  │  ○ Yes (10s)                                    │
+  │  ○ Yes                                           │
   │  ○ No thanks                                    │
   │  ○ Snooze 30m                                   │
   │  ○ Disable                                      │
@@ -209,10 +213,67 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 | `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
 | `trackProgress` | `false` | Set to `true` to track quiz stats locally and on the team leaderboard |
 
-## Uninstall
+## Update
+
+Your `vibecheck.json` config is never overwritten.
+
+<details>
+<summary><strong>Claude Code (installer)</strong></summary>
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --update
+```
+
+What gets updated:
+- The `vibecheck` binary in `.claude/hooks/`
+- The `/quiz` skill prompt (`SKILL.md`) - asks before overwriting if you customized it
+
+What stays the same:
+- Your `vibecheck.json` config (frequency, difficulty, etc.)
+- Your `settings.json` hook setup
+- Your `.vibecheck/` state (quiz timestamps)
+
+</details>
+
+<details>
+<summary><strong>Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider (cargo)</strong></summary>
+
+```bash
+cargo install vibe-check --force
+```
+
+This updates the `vibecheck` binary on your PATH. If you set up auto-quiz with `vibecheck init`, the git post-commit hook automatically picks up the new version - no re-setup needed.
+
+</details>
+
+<details>
+<summary><strong>Manual binary download</strong></summary>
+
+Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases) and replace the old one wherever you put it. The binary names are:
+
+- `vibecheck-darwin-arm64` (macOS Apple Silicon)
+- `vibecheck-darwin-x86_64` (macOS Intel)
+- `vibecheck-linux-x86_64` (Linux x86_64)
+- `vibecheck-linux-arm64` (Linux ARM64)
+- `vibecheck-windows-x86_64.exe` (Windows)
+
+</details>
+
+## Uninstall
+
+**Claude Code (installer)**
+```bash
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
+```
+
+**Standalone CLI (git hook)**
+```bash
+vibecheck remove
+```
+
+**Cargo**
+```bash
+cargo uninstall vibe-check
 ```
 
 ## FAQ
@@ -262,7 +323,7 @@ The installer merges. It adds VibeCheck alongside your existing hooks, never ove
 <details>
 <summary><strong>Does it store my answers?</strong></summary>
 
-No answers or scores are stored. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling, but nothing about your responses.
+By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` in your config, scores are stored locally in that same state file and optionally synced to your team leaderboard.
 </details>
 
 <details>
