@@ -31,9 +31,11 @@ pub(crate) fn resolve_difficulty(
 ) -> DifficultyLevel {
     // Manual override takes precedence
     if let Some(ovr) = difficulty_override {
-        return match ovr {
-            "beginner" => DifficultyLevel::L1Recall,
-            "advanced" => DifficultyLevel::L4Safety,
+        return match ovr.to_lowercase().as_str() {
+            "l1" | "beginner" => DifficultyLevel::L1Recall,
+            "l2" => DifficultyLevel::L2Comprehension,
+            "l3" => DifficultyLevel::L3Verification,
+            "l4" | "advanced" => DifficultyLevel::L4Safety,
             _ => resolve_mode_difficulty(mode, risk, state),
         };
     }
@@ -1062,6 +1064,28 @@ mod tests {
         assert_eq!(
             resolve_difficulty(&Mode::Hardcore, RiskLevel::High, Some("beginner"), &state),
             DifficultyLevel::L1Recall
+        );
+        // L1-L4 overrides
+        assert_eq!(
+            resolve_difficulty(&Mode::VibeCoder, RiskLevel::Low, Some("L1"), &state),
+            DifficultyLevel::L1Recall
+        );
+        assert_eq!(
+            resolve_difficulty(&Mode::VibeCoder, RiskLevel::Low, Some("L2"), &state),
+            DifficultyLevel::L2Comprehension
+        );
+        assert_eq!(
+            resolve_difficulty(&Mode::VibeCoder, RiskLevel::Low, Some("L3"), &state),
+            DifficultyLevel::L3Verification
+        );
+        assert_eq!(
+            resolve_difficulty(&Mode::VibeCoder, RiskLevel::Low, Some("L4"), &state),
+            DifficultyLevel::L4Safety
+        );
+        // Unknown override falls through to mode
+        assert_eq!(
+            resolve_difficulty(&Mode::Hardcore, RiskLevel::High, Some("garbage"), &state),
+            DifficultyLevel::L4Safety
         );
     }
 }

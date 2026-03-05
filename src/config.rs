@@ -73,7 +73,7 @@ impl Default for Config {
             enabled: Some(true),
             min_seconds_between_quizzes: Some(900),
             max_diff_chars: Some(2000),
-            difficulty: Some("normal".to_string()),
+            difficulty: None,
             track_progress: Some(false),
             mode: Some(Mode::VibeCoder),
             hook_action: None,
@@ -111,7 +111,17 @@ pub(crate) fn load_config(project_dir: &Path) -> Config {
 
 pub(crate) fn read_config_file(path: &Path) -> Option<Config> {
     let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    match serde_json::from_str(&content) {
+        Ok(cfg) => Some(cfg),
+        Err(e) => {
+            eprintln!(
+                "warning: could not parse {}: {}. Using defaults.",
+                path.display(),
+                e
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn load_state(path: &Path) -> State {
@@ -202,7 +212,7 @@ mod tests {
         assert_eq!(cfg.enabled, Some(true));
         assert_eq!(cfg.min_seconds_between_quizzes, Some(900));
         assert_eq!(cfg.max_diff_chars, Some(2000));
-        assert_eq!(cfg.difficulty.as_deref(), Some("normal"));
+        assert_eq!(cfg.difficulty, None);
         assert_eq!(cfg.track_progress, Some(false));
         assert_eq!(cfg.mode, Some(Mode::VibeCoder));
     }

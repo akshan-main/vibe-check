@@ -130,7 +130,17 @@ download_binary() {
     # Try building from source if cargo is available
     if command -v cargo &>/dev/null; then
         info "Trying cargo install..."
-        cargo install vibe-check 2>/dev/null && return 0
+        if cargo install vibe-check 2>/dev/null; then
+            # Copy cargo-built binary to expected hook path
+            local cargo_bin
+            cargo_bin="$(command -v vibecheck 2>/dev/null || echo "$HOME/.cargo/bin/vibecheck")"
+            if [[ -x "$cargo_bin" ]]; then
+                cp "$cargo_bin" "$dest"
+                chmod +x "$dest"
+                ok "Built from source and installed."
+                return 0
+            fi
+        fi
     fi
 
     error "Could not download or build vibecheck."
@@ -195,9 +205,9 @@ write_default_config() {
     cat > "$dest" <<'JSONEOF'
 {
   "enabled": true,
+  "mode": "vibe_coder",
   "minSecondsBetweenQuizzes": 900,
   "maxDiffChars": 2000,
-  "difficulty": "normal",
   "trackProgress": false
 }
 JSONEOF

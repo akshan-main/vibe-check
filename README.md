@@ -252,13 +252,13 @@ Or add the steps to your existing workflow:
 ```yaml
 - name: Install vibecheck
   run: |
-    curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | sh
-    echo "$HOME/.local/bin" >> $GITHUB_PATH
+    curl -fsSL https://github.com/akshan-main/vibe-check/releases/latest/download/vibecheck-linux-x86_64 -o /usr/local/bin/vibecheck
+    chmod +x /usr/local/bin/vibecheck
 
 - name: Generate quiz
   id: quiz
   run: |
-    vibecheck ci --base origin/${{ github.base_ref }} --head ${{ github.sha }} > quiz.md 2>/dev/null || true
+    vibecheck ci --base origin/${{ github.base_ref }} --head ${{ github.sha }} > quiz.md
     if [ ! -s quiz.md ]; then echo "skip=true" >> $GITHUB_OUTPUT; fi
 
 - name: Post quiz as PR comment

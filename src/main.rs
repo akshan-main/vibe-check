@@ -132,7 +132,13 @@ fn run_ci(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| env::var("GITHUB_SHA").ok().filter(|s| !s.is_empty()))
         .unwrap_or_else(|| "HEAD".to_string());
 
-    let (raw_diff, files) = git::git_diff_between(&project_dir, &base, &head)?;
+    let (raw_diff, files) = match git::git_diff_between(&project_dir, &base, &head) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     if raw_diff.trim().is_empty() && files.is_empty() {
         eprintln!("no changes between {} and {}", base, head);

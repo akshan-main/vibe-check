@@ -133,8 +133,9 @@ pub(crate) fn git_diff_between(
     let diff_text = h1.join().map_err(|_| "thread panic")?;
     let files_raw = h2.join().map_err(|_| "thread panic")?;
 
-    // If diff fails (e.g. invalid refs), return empty rather than error
-    let diff = diff_text.unwrap_or_default();
+    let diff = diff_text.map_err(|e| -> Box<dyn std::error::Error> {
+        format!("git diff {}..{} failed: {}", base, head, e).into()
+    })?;
     let files: Vec<String> = files_raw
         .unwrap_or_default()
         .lines()
@@ -153,7 +154,15 @@ pub(crate) fn init_git_hook() -> Result<(), Box<dyn std::error::Error>> {
     let hook_path = hooks_dir.join("post-commit");
 
     let marker = "# vibecheck";
-    let hook_cmd = "vibecheck quiz --commit 2>/dev/null || true";
+
+    // Try to find the absolute path to vibecheck binary for the hook
+    let vibecheck_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "vibecheck".to_string());
+
+    let hook_cmd = format!("{} quiz --commit 2>/dev/null || true", vibecheck_bin);
     let block = format!("\n{}\n{}\n", marker, hook_cmd);
 
     if hook_path.exists() {
