@@ -20,6 +20,7 @@
 </p>
 
 ---
+** Actively in development. Always update. Update instructions are available under update section **
 
 More and more people are vibe coding but barely know what got built. You say "add rate limiting" and your AI does it. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
 
