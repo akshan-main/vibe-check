@@ -12,8 +12,8 @@
   <p align="center">
     <a href="#install">Install</a> &middot;
     <a href="#how-it-works">How It Works</a> &middot;
-    <a href="#works-with-any-ai-tool">Any AI Tool</a> &middot;
     <a href="#configure">Configure</a> &middot;
+    <a href="#team-mode">Team Mode</a> &middot;
     <a href="#update">Update</a> &middot;
     <a href="#faq">FAQ</a>
   </p>
@@ -25,7 +25,7 @@ More and more people are vibe coding but barely know what got built. You say "ad
 
 VibeCheck asks you stuff like that. One question after your AI finishes a task, based on your actual diff. It looks at what was built, compares it to what you asked for, and checks if you know what changed in your product.
 
-Works with any AI coding tool. Native integration with Claude Code (auto-quiz after every task), and a standalone CLI that works with Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider, or anything else that writes code and commits to git.
+Works with any AI coding tool that uses git. Auto-quiz after every commit with a single setup command, or run on-demand whenever you want.
 
 Skip it every time if you want. No scores. No answers saved. Just a quick reality check.
 
@@ -34,53 +34,64 @@ Skip it every time if you want. No scores. No answers saved. Just a quick realit
 
 ## Install
 
-One command. Downloads a pre-built binary and wires everything up.
+<details open>
+<summary><strong>Quick install (any tool)</strong></summary>
+
+```bash
+cargo install vibe-check
+```
+
+Then set up auto-quiz in any project:
+```bash
+vibecheck init
+```
+
+This installs a git `post-commit` hook. After every commit, VibeCheck prints a quiz to your terminal. Works with Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider, or anything that commits to git.
+
+</details>
+
+<details>
+<summary><strong>Claude Code (deeper integration)</strong></summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash
 ```
 
-That's it. Works in both Claude Code CLI and VS Code extension.
+This downloads a pre-built binary and wires up a [Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) so quizzes trigger automatically after every task - no commit needed. Also installs a `/quiz` slash command for on-demand quizzes. Works in both the CLI and VS Code extension.
 
-<details>
-<summary>More options</summary>
-
+More options:
 ```bash
 # Install globally (all projects)
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --global
 
 # Only the /quiz command, no auto-trigger
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --skill-only
-
-# Update (keeps your config)
-curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --update
-
-# Uninstall
-curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
-
-# Or if you have Rust: cargo install vibe-check
 ```
+
+[Read the install script](install/install.sh) - it downloads one binary, creates a config file, and registers a hook. Nothing else.
 
 </details>
 
-[Read the install script](install/install.sh) - it downloads one binary, creates a config file, and adds one entry to your Claude Code settings. Nothing else.
+<details>
+<summary><strong>Manual binary download</strong></summary>
+
+Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases):
+
+- `vibecheck-darwin-arm64` (macOS Apple Silicon)
+- `vibecheck-darwin-x86_64` (macOS Intel)
+- `vibecheck-linux-x86_64` (Linux x86_64)
+- `vibecheck-linux-arm64` (Linux ARM64)
+- `vibecheck-windows-x86_64.exe` (Windows)
+
+Put it somewhere on your PATH, then run `vibecheck init` in any project.
+
+</details>
 
 ## How It Works
 
-### Auto-quiz (default)
-
 ```
 You: "Add rate limiting to the API"
-Claude: *writes code, finishes task*
-
-  ┌─────────────────────────────────────────────────┐
-  │  VibeCheck: quick check on what just changed?    │
-  │                                                 │
-  │  ○ Yes                                           │
-  │  ○ No thanks                                    │
-  │  ○ Snooze 30m                                   │
-  │  ○ Disable                                      │
-  └─────────────────────────────────────────────────┘
+AI: *writes code, commits*
 
   ┌─────────────────────────────────────────────────────┐
   │  You just added rate limiting. When a user hits     │
@@ -94,31 +105,29 @@ Claude: *writes code, finishes task*
   │  ○ D) They get redirected to the homepage           │
   └─────────────────────────────────────────────────────┘
 
-Claude: "B. The rate limiter returns a 429 with no custom
+Answer: B. The rate limiter returns a 429 with no custom
         message. Your users will see a raw error.
 
         Your prompt said 'add rate limiting' but didn't
         mention what the user should see when they hit it.
         A more complete prompt: 'Add rate limiting and
         return a friendly error with a Retry-After header
-        when the limit is hit.'"
+        when the limit is hit.'
 ```
 
-Under the hood: a [Claude Code Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) reads your git diff and asks one question about what your product actually does now. Since the quiz runs inside your Claude Code session, it already has the full conversation context - it knows what you asked for and what got built.
+### Auto-quiz after every commit
 
-### On-demand (`/quiz`)
+```bash
+vibecheck init
+```
 
-Type `/quiz` anytime in Claude Code to quiz yourself on the current diff.
+Installs a git `post-commit` hook. After every commit, VibeCheck reads the diff and prints quiz context. Works with any AI tool that commits to git.
 
-### Standalone CLI
+```bash
+vibecheck remove    # uninstall the hook
+```
 
-Run `vibecheck quiz` from any terminal. Works with any AI tool. See [Works with Any AI Tool](#works-with-any-ai-tool) for details.
-
-## Works with Any AI Tool
-
-VibeCheck isn't locked to Claude Code. The `vibecheck` binary is a standalone CLI that works anywhere.
-
-### Standalone quiz (any editor)
+### On-demand quiz
 
 ```bash
 # Quiz yourself on uncommitted changes
@@ -136,21 +145,17 @@ vibecheck quiz | llm
 
 The `quiz` command reads your git diff, runs diff analysis (function detection, pattern matching, change summary), and outputs structured quiz context. Paste it into whatever AI tool you use.
 
-### Auto-quiz after every commit (any editor)
+### Claude Code bonus features
 
-```bash
-vibecheck init
-```
+Claude Code gets a couple extras because of its [hooks system](https://docs.anthropic.com/en/docs/claude-code/hooks):
 
-This installs a git `post-commit` hook. After every commit, VibeCheck prints quiz context to your terminal. Works with Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider, or any tool that commits to git.
-
-```bash
-vibecheck remove    # uninstall the hook
-```
+- **Auto-quiz without committing**: triggers after every task, not just commits, so you get quizzed even on uncommitted changes
+- **`/quiz` slash command**: type `/quiz` anytime for an on-demand quiz without leaving your session
+- **Full conversation context**: the quiz knows what you asked for and what got built, so it can compare intent vs. implementation
 
 ### Why Rust?
 
-VibeCheck is a single static binary with no runtime dependencies to install. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
+VibeCheck is a single static binary with no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
 
 ## Team Mode
 
@@ -193,7 +198,7 @@ vibecheck team reset    # reset your own stats
 
 ## Configure
 
-Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for global):
+Create or edit `.claude/vibecheck.json` in your project root (or `~/.claude/vibecheck.json` for global). This path is used regardless of which AI tool you use:
 
 ```json
 {
@@ -207,7 +212,7 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `true` | Kill switch for auto-quiz (does not affect `/quiz`) |
+| `enabled` | `true` | Kill switch for auto-quiz (does not affect `/quiz` or `vibecheck quiz`) |
 | `minSecondsBetweenQuizzes` | `900` | Minimum seconds between auto-quizzes |
 | `maxDiffChars` | `2000` | Max diff characters sent as quiz context |
 | `difficulty` | `"normal"` | `"beginner"` for obvious changes, `"advanced"` for edge cases and subtle behavior |
@@ -216,6 +221,17 @@ Edit `.claude/vibecheck.json` in your project (or `~/.claude/vibecheck.json` for
 ## Update
 
 Your `vibecheck.json` config is never overwritten.
+
+<details>
+<summary><strong>Cargo (any tool)</strong></summary>
+
+```bash
+cargo install vibe-check --force
+```
+
+Updates the binary on your PATH. If you set up auto-quiz with `vibecheck init`, the git post-commit hook automatically picks up the new version - no re-setup needed.
+
+</details>
 
 <details>
 <summary><strong>Claude Code (installer)</strong></summary>
@@ -236,35 +252,13 @@ What stays the same:
 </details>
 
 <details>
-<summary><strong>Cursor, Windsurf, OpenClaw, PicoClaw, NanoClaw, Cline, Aider (cargo)</strong></summary>
-
-```bash
-cargo install vibe-check --force
-```
-
-This updates the `vibecheck` binary on your PATH. If you set up auto-quiz with `vibecheck init`, the git post-commit hook automatically picks up the new version - no re-setup needed.
-
-</details>
-
-<details>
 <summary><strong>Manual binary download</strong></summary>
 
-Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases) and replace the old one wherever you put it. The binary names are:
-
-- `vibecheck-darwin-arm64` (macOS Apple Silicon)
-- `vibecheck-darwin-x86_64` (macOS Intel)
-- `vibecheck-linux-x86_64` (Linux x86_64)
-- `vibecheck-linux-arm64` (Linux ARM64)
-- `vibecheck-windows-x86_64.exe` (Windows)
+Grab the latest binary for your platform from [Releases](https://github.com/akshan-main/vibe-check/releases) and replace the old one wherever you put it.
 
 </details>
 
 ## Uninstall
-
-**Claude Code (installer)**
-```bash
-curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
-```
 
 **Standalone CLI (git hook)**
 ```bash
@@ -276,10 +270,15 @@ vibecheck remove
 cargo uninstall vibe-check
 ```
 
+**Claude Code (installer)**
+```bash
+curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --uninstall
+```
+
 ## FAQ
 
 <details>
-<summary><strong>Can't I just ask Claude about my code?</strong></summary>
+<summary><strong>Can't I just ask my AI about my code?</strong></summary>
 
 You can. You won't. VibeCheck is proactive - it catches the gaps you didn't know to ask about. And it compares your original prompt to what was actually built, so you know exactly where the disconnect was.
 </details>
@@ -293,19 +292,13 @@ Learning mode teaches you how the code works. VibeCheck checks if you know what 
 <details>
 <summary><strong>Will it loop forever?</strong></summary>
 
-No. Claude Code sets `stop_hook_active=true` on re-entry, and the quiz ends with a `[vibecheck:done]` sentinel. Both prevent re-triggering.
+No. The quiz outputs a `[vibecheck:done]` sentinel that prevents re-triggering. In Claude Code, the Stop hook also checks `stop_hook_active` to avoid loops.
 </details>
 
 <details>
-<summary><strong>Does it work with Cursor/Windsurf/OpenClaw/other AI tools?</strong></summary>
+<summary><strong>Does it work with Cursor/Windsurf/OpenClaw/Cline/Aider?</strong></summary>
 
-Yes. Run `vibecheck quiz` from any terminal, or `vibecheck init` to auto-quiz after every commit. The standalone CLI works with anything that uses git. Claude Code gets the deepest integration (auto-quiz via Stop hooks), but the core quiz works everywhere.
-</details>
-
-<details>
-<summary><strong>Does it work in VS Code?</strong></summary>
-
-Yes. The VS Code extension reads the same `.claude/settings.json` and `~/.claude/settings.json` files as the CLI.
+Yes. Run `vibecheck init` to auto-quiz after every commit, or `vibecheck quiz` for on-demand quizzes. Works with anything that uses git.
 </details>
 
 <details>
@@ -315,27 +308,21 @@ Yes. Set `minSecondsBetweenQuizzes` in `vibecheck.json`. Default is 900 (15 minu
 </details>
 
 <details>
-<summary><strong>What if I already have Stop hooks?</strong></summary>
-
-The installer merges. It adds VibeCheck alongside your existing hooks, never overwrites.
-</details>
-
-<details>
 <summary><strong>Does it store my answers?</strong></summary>
 
 By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` in your config, scores are stored locally in that same state file and optionally synced to your team leaderboard.
 </details>
 
 <details>
-<summary><strong>Does the quiz affect what Claude does next?</strong></summary>
+<summary><strong>Does the quiz affect what my AI does next?</strong></summary>
 
-No. The quiz runs after the main task is done. Quiz answers don't influence anything.
+No. The quiz runs after the task is done. Quiz answers don't influence anything.
 </details>
 
 <details>
 <summary><strong>I only want on-demand quizzes, not auto-trigger.</strong></summary>
 
-Use `--skill-only` during install. Or set `"enabled": false` in `vibecheck.json`.
+Just don't run `vibecheck init`. Use `vibecheck quiz` whenever you want. For Claude Code users: use `--skill-only` during install, or set `"enabled": false` in `vibecheck.json`.
 </details>
 
 ## Build from Source

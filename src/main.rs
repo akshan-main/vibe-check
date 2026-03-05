@@ -1260,7 +1260,7 @@ STEP 1: Use AskUserQuestion to ask:
   question: "VibeCheck: quick comprehension check on what just changed?"
   header: "VibeCheck"
   options:
-    - label: "Yes (10s)", description: "One quick question about your changes"
+    - label: "Yes", description: "One quick question about your changes"
     - label: "No thanks", description: "Skip this time"
     - label: "Snooze 30m", description: "Don't ask again for 30 minutes"
     - label: "Disable", description: "Turn off VibeCheck for this repo"
@@ -1301,7 +1301,7 @@ NEVER ASK:
   * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
   * Generic questions unrelated to this specific diff
 
-WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
+WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what was actually built.
 
 Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
 

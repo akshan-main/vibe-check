@@ -184,7 +184,7 @@ NEVER ASK:
   * Anything a developer would need to read code to answer - the question should be answerable by someone who understands the PRODUCT but not the code
   * Generic questions unrelated to this specific diff
 
-WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what Claude actually built.
+WRONG ANSWERS: Each should be a plausible misunderstanding of what the product change does. Things a developer might assume if they didn't pay attention to what was actually built.
 
 Format: exactly 4 options (labels "A", "B", "C", "D"), one correct. Ask via AskUserQuestion with header: "VibeCheck", multiSelect: false.
 
