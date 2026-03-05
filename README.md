@@ -30,7 +30,7 @@ VibeCheck asks you stuff like that. One question after your AI finishes a task, 
 
 Works with any AI coding tool that uses git. Auto-quiz after every commit with a single setup command, or run on-demand whenever you want.
 
-Skip it every time if you want. No scores. No answers saved. Just a quick reality check.
+Skip it every time if you want. By default, no scores or answers are saved. Just a quick reality check.
 
 
 ## Install
@@ -174,7 +174,7 @@ Claude Code gets a couple extras because of its [hooks system](https://docs.anth
 
 ### Why Rust?
 
-VibeCheck is a single static binary with no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
+VibeCheck is a single static binary. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos. Score tracking updates use python3 one-liners when available.
 
 ## Modes
 
@@ -225,6 +225,8 @@ Enable tracking in your config:
 ```json
 { "trackProgress": true }
 ```
+
+Auto-tracking works in the Claude Code Stop hook. For other tools, `vibecheck quiz` includes tracking instructions in the output that your AI tool can execute.
 
 When weak areas are detected (under 60% accuracy with 3+ quizzes), the quiz automatically focuses on building understanding in that area.
 

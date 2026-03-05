@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
         --uninstall)  UNINSTALL=true; shift ;;
         --update)     UPDATE=true; shift ;;
         --skill-only) SKILL_ONLY=true; shift ;;
-        --version)    PIN_VERSION="$2"; shift 2 ;;
+        --version)    if [[ $# -lt 2 || "$2" == -* ]]; then error "--version requires a value (e.g. --version v0.2.0)"; exit 1; fi; PIN_VERSION="$2"; shift 2 ;;
         --help|-h)    usage; exit 0 ;;
         -*)           error "Unknown option: $1"; usage; exit 1 ;;
         *)            TARGET_DIR="$1"; shift ;;
