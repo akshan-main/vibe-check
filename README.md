@@ -30,6 +30,8 @@ VibeCheck asks you stuff like that. One question after your AI finishes a task, 
 
 The quiz is a forcing function, not an authority. An LLM generates the question and the "correct" answer from your diff - it might be wrong, and it definitely doesn't know what your real users expect. But if you stop to think "wait, that answer doesn't match what I wanted" - that's the point. You engaged with the code.
 
+This is not a replacement for code review, pair programming, or talking to your team. Those are where real understanding happens. VibeCheck is just the minimum bar: did you personally look at what got built before you shipped it.
+
 Works with any AI coding tool that uses git. Auto-quiz after every commit with a single setup command, or run on-demand whenever you want.
 
 Skip it every time if you want. By default, no scores or answers are saved. Just a quick pause to read your own diff.
@@ -282,7 +284,7 @@ Or add the steps to your existing workflow:
 
 ## Team Mode
 
-Track your team's product understanding with a shared leaderboard. No server needed - stats sync through git.
+A lightweight leaderboard so your team can see who's been reading their diffs. Not a substitute for code review or talking to each other - just a nudge to keep everyone honest. No server needed, stats sync through git.
 
 ```bash
 # One person sets it up
