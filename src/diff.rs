@@ -102,6 +102,12 @@ fn check_patterns(content: &str, summary: &mut DiffSummary) {
         || lower.contains("permission")
         || lower.contains("access_token")
         || lower.contains("jwt")
+        || lower.contains("payment")
+        || lower.contains("billing")
+        || lower.contains("checkout")
+        || lower.contains("stripe")
+        || lower.contains("invoice")
+        || lower.contains("subscription")
     {
         summary.has_security_changes = true;
     }

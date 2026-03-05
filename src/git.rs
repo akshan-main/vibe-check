@@ -162,7 +162,7 @@ pub(crate) fn init_git_hook() -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "vibecheck".to_string());
 
-    let hook_cmd = format!("{} quiz --commit 2>/dev/null || true", vibecheck_bin);
+    let hook_cmd = format!("\"{}\" quiz --commit 2>/dev/null || true", vibecheck_bin);
     let block = format!("\n{}\n{}\n", marker, hook_cmd);
 
     if hook_path.exists() {

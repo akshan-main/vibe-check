@@ -111,17 +111,57 @@ pub(crate) fn load_config(project_dir: &Path) -> Config {
 
 pub(crate) fn read_config_file(path: &Path) -> Option<Config> {
     let content = fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&content) {
-        Ok(cfg) => Some(cfg),
+
+    // Try strict parse first
+    if let Ok(cfg) = serde_json::from_str::<Config>(&content) {
+        return Some(cfg);
+    }
+
+    // Tolerant parse: read as generic JSON, extract valid fields
+    let map: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&content) {
+        Ok(m) => m,
         Err(e) => {
             eprintln!(
                 "warning: could not parse {}: {}. Using defaults.",
                 path.display(),
                 e
             );
-            None
+            return None;
+        }
+    };
+
+    eprintln!(
+        "warning: {} has invalid fields, using valid ones with defaults for the rest.",
+        path.display()
+    );
+
+    let mut cfg = Config::default();
+    if let Some(v) = map.get("enabled").and_then(|v| v.as_bool()) {
+        cfg.enabled = Some(v);
+    }
+    if let Some(v) = map.get("minSecondsBetweenQuizzes").and_then(|v| v.as_u64()) {
+        cfg.min_seconds_between_quizzes = Some(v);
+    }
+    if let Some(v) = map.get("maxDiffChars").and_then(|v| v.as_u64()) {
+        cfg.max_diff_chars = Some(v as usize);
+    }
+    if let Some(v) = map.get("difficulty").and_then(|v| v.as_str()) {
+        cfg.difficulty = Some(v.to_string());
+    }
+    if let Some(v) = map.get("trackProgress").and_then(|v| v.as_bool()) {
+        cfg.track_progress = Some(v);
+    }
+    if let Some(v) = map.get("mode").and_then(|v| v.as_str()) {
+        if let Some(m) = Mode::from_str_strict(v) {
+            cfg.mode = Some(m);
+        } else {
+            eprintln!("warning: unknown mode '{}', using default.", v);
         }
     }
+    if let Some(v) = map.get("hookAction").and_then(|v| v.as_str()) {
+        cfg.hook_action = Some(v.to_string());
+    }
+    Some(cfg)
 }
 
 pub(crate) fn load_state(path: &Path) -> State {

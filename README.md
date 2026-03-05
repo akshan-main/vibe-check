@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install/install.sh | bash -s -- --skill-only
 ```
 
-[Read the install script](install/install.sh) - it downloads one binary, creates a config file, and registers a hook. Nothing else.
+[Read the install script](install/install.sh) - it downloads a binary, creates a config file, registers a Stop hook, and installs a `/quiz` skill.
 
 </details>
 
@@ -188,7 +188,7 @@ vibecheck mode developer    # switch modes
 | Mode | Who it's for | How it works |
 |------|-------------|--------------|
 | `vibe_coder` | Flow-first builders | Light questions, casual tone. L1 difficulty (what changed). Default mode. |
-| `developer` | Working engineers | Risk-scaled difficulty. Low-risk diffs get L2, high-risk get L3-L4. Verification-focused. |
+| `developer` | Working engineers | Risk-scaled difficulty. Low-risk diffs get L2, high-risk get L3. Verification-focused. |
 | `hardcore` | "I don't trust myself at 2am" | Always L4. Failure modes, rollback plans, security implications. High-risk diffs get a follow-up question. |
 | `learning` | Leveling up | Adaptive difficulty based on your accuracy. Starts easy, escalates as you prove competence. |
 
@@ -228,7 +228,7 @@ Enable tracking in your config:
 
 Auto-tracking works in the Claude Code Stop hook. For other tools, `vibecheck quiz` includes tracking instructions in the output that your AI tool can execute.
 
-When weak areas are detected (under 60% accuracy with 3+ quizzes), the quiz automatically focuses on building understanding in that area.
+When weak areas are detected (under 60% accuracy with 3+ quizzes), the Claude Code hook automatically focuses questions on building understanding in that area.
 
 ## CI Gate
 

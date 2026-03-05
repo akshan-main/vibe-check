@@ -56,6 +56,7 @@ UPDATE=false
 SKILL_ONLY=false
 PIN_VERSION=""
 TARGET_DIR="."
+INSTALL_SOURCE="release"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -122,6 +123,7 @@ download_binary() {
     if curl -fsSL --retry 3 -o "$dest" "$url" 2>/dev/null; then
         chmod +x "$dest"
         ok "Binary downloaded."
+        INSTALL_SOURCE="release"
         return 0
     fi
 
@@ -138,6 +140,7 @@ download_binary() {
                 cp "$cargo_bin" "$dest"
                 chmod +x "$dest"
                 ok "Built from source and installed."
+                INSTALL_SOURCE="cargo"
                 return 0
             fi
         fi
@@ -465,7 +468,9 @@ do_install() {
     local platform
     platform="$(detect_platform)"
     download_binary "$platform" "$binary_dest"
-    verify_checksum "$platform" "$binary_dest"
+    if [[ "$INSTALL_SOURCE" == "release" ]]; then
+        verify_checksum "$platform" "$binary_dest"
+    fi
 
     # Config (don't overwrite)
     if [[ ! -f "$CLAUDE_DIR/$CONFIG_NAME" ]]; then
@@ -543,7 +548,9 @@ do_update() {
     local platform
     platform="$(detect_platform)"
     download_binary "$platform" "$binary_dest"
-    verify_checksum "$platform" "$binary_dest"
+    if [[ "$INSTALL_SOURCE" == "release" ]]; then
+        verify_checksum "$platform" "$binary_dest"
+    fi
 
     # Update skill (ask before overwriting)
     local skill_dir="$CLAUDE_DIR/skills/quiz"
