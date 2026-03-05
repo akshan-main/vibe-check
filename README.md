@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">VibeCheck</h1>
   <p align="center">
-    <strong>Do you actually know what your app just did?</strong>
+    <strong>Stop and read your diff before you ship it.</strong>
   </p>
   <p align="center">
     One question. Your exact diff. Skip anytime.
@@ -26,11 +26,13 @@
 
 More and more people are vibe coding but barely know what got built. You say "add rate limiting" and your AI does it. But do you know what your users actually see when they hit the limit? A friendly message? A raw 429? Does the page just hang?
 
-VibeCheck asks you stuff like that. One question after your AI finishes a task, based on your actual diff. It looks at what was built, compares it to what you asked for, and checks if you know what changed in your product.
+VibeCheck asks you stuff like that. One question after your AI finishes a task, based on your actual diff. It forces you to stop and actually read what was built before you move on.
+
+The quiz is a forcing function, not an authority. An LLM generates the question and the "correct" answer from your diff - it might be wrong, and it definitely doesn't know what your real users expect. But if you stop to think "wait, that answer doesn't match what I wanted" - that's the point. You engaged with the code.
 
 Works with any AI coding tool that uses git. Auto-quiz after every commit with a single setup command, or run on-demand whenever you want.
 
-Skip it every time if you want. By default, no scores or answers are saved. Just a quick reality check.
+Skip it every time if you want. By default, no scores or answers are saved. Just a quick pause to read your own diff.
 
 
 ## Install
@@ -108,14 +110,13 @@ AI: *writes code, commits*
   │  ○ D) They get redirected to the homepage           │
   └─────────────────────────────────────────────────────┘
 
-Answer: B. The rate limiter returns a 429 with no custom
-        message. Your users will see a raw error.
+You pick B. Or maybe you're not sure. Either way, you
+just read your diff and thought about what your users
+will actually see - and that's the whole point.
 
-        Your prompt said 'add rate limiting' but didn't
-        mention what the user should see when they hit it.
-        A more complete prompt: 'Add rate limiting and
-        return a friendly error with a Retry-After header
-        when the limit is hit.'
+Maybe the answer says B is right. Maybe you disagree
+because you know your frontend handles 429s already.
+Good. You checked.
 ```
 
 ### Auto-quiz after every commit
@@ -170,7 +171,7 @@ Claude Code gets a couple extras because of its [hooks system](https://docs.anth
 
 - **Auto-quiz without committing**: triggers after every task, not just commits, so you get quizzed even on uncommitted changes
 - **`/quiz` slash command**: type `/quiz` anytime for an on-demand quiz without leaving your session
-- **Full conversation context**: the quiz knows what you asked for and what got built, so it can compare intent vs. implementation
+- **Conversation context**: because the Stop hook runs inside Claude Code's context, the LLM already knows what you asked for and what it built. The quiz can compare intent vs. implementation. VibeCheck itself only reads `git diff` - the conversation awareness comes from Claude Code, not from VibeCheck reading your chat history.
 
 ### Why Rust?
 
@@ -201,7 +202,7 @@ Or set mode in config:
 
 ### Stats and weak-area tracking
 
-Track what categories you struggle with:
+Track which categories trip you up (scored by the LLM, so take it as a signal, not a verdict):
 
 ```bash
 vibecheck stats
@@ -228,11 +229,11 @@ Enable tracking in your config:
 
 Auto-tracking and weak-area adaptation work in the Claude Code Stop hook. For other tools (git hook, manual `vibecheck quiz`), the quiz output is context-only - stats are not tracked automatically.
 
-When weak areas are detected (under 60% accuracy with 3+ quizzes in Claude Code), the hook automatically focuses questions on building understanding in that area.
+When weak areas are detected (under 60% accuracy with 3+ quizzes in Claude Code), the hook steers questions toward that area. The scores reflect what the LLM thinks, not ground truth - but patterns over time still tell you where to pay more attention.
 
 ## CI Gate
 
-Post a VibeCheck quiz as a PR comment so the author has to think about what they're merging.
+Post a VibeCheck quiz as a PR comment. The author has to at least look at what they're merging, even if they disagree with the LLM's answer.
 
 ```bash
 # Generate quiz markdown for a PR
@@ -405,13 +406,13 @@ curl -fsSL https://raw.githubusercontent.com/akshan-main/vibe-check/main/install
 <details>
 <summary><strong>Can't I just ask my AI about my code?</strong></summary>
 
-You can. You won't. VibeCheck is proactive - it catches the gaps you didn't know to ask about. And it compares your original prompt to what was actually built, so you know exactly where the disconnect was.
+You can. You won't. VibeCheck is proactive - it makes you stop and look at what changed before you move on. The questions come from an LLM reading your diff, so they're not always right. But they're usually enough to make you notice something you would have shipped without thinking about.
 </details>
 
 <details>
 <summary><strong>How is this different from learning mode?</strong></summary>
 
-Learning mode teaches you how the code works. VibeCheck checks if you know what your product does. "What does the user see when they hit the rate limit?" vs "here's how the middleware pipeline works."
+Learning mode teaches you how the code works. VibeCheck makes you think about what your product does from a user's perspective. "What does the user see when they hit the rate limit?" vs "here's how the middleware pipeline works." The answers are LLM-generated and might not match your real product - the value is in the pause, not the score.
 </details>
 
 <details>
@@ -479,7 +480,7 @@ Nothing is sent over the network. The install script downloads the binary from G
 
 ## Limitations
 
-- **Untracked files are invisible.** VibeCheck uses `git diff`, which only sees tracked files. New files that haven't been `git add`-ed won't appear in the quiz.
+- **Only sees git-tracked changes.** VibeCheck uses `git diff` in all modes - terminal, Claude Code hook, and CI. New files that haven't been `git add`-ed won't appear in the quiz. Files in `.gitignore` (like `.env`) are never read or sent as context.
 - **Large diffs get truncated.** The `maxDiffChars` setting (default 2000) caps how much diff context is sent. If your change is bigger than that, the quiz only covers the first portion.
 - **Bash installer is macOS/Linux only.** Windows users should use `cargo install vibe-check` instead.
 - **Pattern detection is keyword-based.** The security, error handling, and API change flags use simple string matching, not AST parsing. They may flag false positives (e.g., a variable named `error_count`) or miss changes that don't use common keywords.
