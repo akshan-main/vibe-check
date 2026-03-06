@@ -95,8 +95,8 @@ pub(crate) fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let min_gap = config.min_seconds_between_quizzes.unwrap_or(900);
-    if now.saturating_sub(state.last_quiz_at) < min_gap {
+    let min_gap = config.min_seconds_between_quizzes.unwrap_or(0);
+    if min_gap > 0 && now.saturating_sub(state.last_quiz_at) < min_gap {
         return Ok(());
     }
 

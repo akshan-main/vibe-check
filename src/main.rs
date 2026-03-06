@@ -406,7 +406,7 @@ fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
     println!("  mode: {}", cfg.mode.clone().unwrap_or_default());
     println!(
         "  minSecondsBetweenQuizzes: {}",
-        cfg.min_seconds_between_quizzes.unwrap_or(900)
+        cfg.min_seconds_between_quizzes.unwrap_or(0)
     );
     println!("  maxDiffChars: {}", cfg.max_diff_chars.unwrap_or(2000));
     println!(

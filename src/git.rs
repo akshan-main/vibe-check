@@ -187,9 +187,122 @@ pub(crate) fn init_git_hook() -> Result<(), Box<dyn std::error::Error>> {
     println!("Installed post-commit hook.");
     println!("VibeCheck will print quiz context after every commit.");
     println!("Works with any AI tool - pipe it, paste it, or let your tool read it.");
+
+    // Also set up Claude Code Stop hook
+    match setup_claude_code_hook(&vibecheck_bin) {
+        Ok(true) => println!("Installed Claude Code Stop hook in ~/.claude/settings.json"),
+        Ok(false) => println!("Claude Code Stop hook already configured."),
+        Err(e) => eprintln!("Could not set up Claude Code hook: {}", e),
+    }
+
     println!("\nRemove with: vibecheck remove");
 
     Ok(())
+}
+
+fn setup_claude_code_hook(vibecheck_bin: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let home = env::var("HOME").map_err(|_| "HOME not set")?;
+    let settings_path = PathBuf::from(&home).join(".claude").join("settings.json");
+
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path)?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let hook_command = format!("\"{}\"", vibecheck_bin);
+
+    // Check if already configured
+    if let Some(hooks) = settings.get("hooks") {
+        if let Some(stop) = hooks.get("Stop") {
+            if let Some(arr) = stop.as_array() {
+                for entry in arr {
+                    if let Some(inner) = entry.get("hooks") {
+                        if let Some(inner_arr) = inner.as_array() {
+                            for h in inner_arr {
+                                if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                                    if cmd.contains("vibecheck") {
+                                        return Ok(false);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let stop_hook = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": hook_command
+        }]
+    });
+
+    let hooks = settings
+        .as_object_mut()
+        .ok_or("settings is not an object")?
+        .entry("hooks")
+        .or_insert(serde_json::json!({}));
+    let stop_arr = hooks
+        .as_object_mut()
+        .ok_or("hooks is not an object")?
+        .entry("Stop")
+        .or_insert(serde_json::json!([]));
+    if let Some(arr) = stop_arr.as_array_mut() {
+        arr.push(stop_hook);
+    }
+
+    let claude_dir = PathBuf::from(&home).join(".claude");
+    fs::create_dir_all(&claude_dir)?;
+    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(true)
+}
+
+fn remove_claude_code_hook() -> Result<bool, Box<dyn std::error::Error>> {
+    let home = env::var("HOME").map_err(|_| "HOME not set")?;
+    let settings_path = PathBuf::from(&home).join(".claude").join("settings.json");
+
+    if !settings_path.exists() {
+        return Ok(false);
+    }
+
+    let content = fs::read_to_string(&settings_path)?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+
+    let mut removed = false;
+
+    if let Some(hooks) = settings.get_mut("hooks") {
+        if let Some(stop) = hooks.get_mut("Stop") {
+            if let Some(arr) = stop.as_array_mut() {
+                let before = arr.len();
+                arr.retain(|entry| {
+                    if let Some(inner) = entry.get("hooks") {
+                        if let Some(inner_arr) = inner.as_array() {
+                            return !inner_arr.iter().any(|h| {
+                                h.get("command")
+                                    .and_then(|c| c.as_str())
+                                    .map(|c| c.contains("vibecheck"))
+                                    .unwrap_or(false)
+                            });
+                        }
+                    }
+                    true
+                });
+                removed = arr.len() < before;
+            }
+        }
+    }
+
+    if removed {
+        fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    }
+
+    Ok(removed)
 }
 
 pub(crate) fn remove_git_hook() -> Result<(), Box<dyn std::error::Error>> {
@@ -232,6 +345,12 @@ pub(crate) fn remove_git_hook() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         fs::write(&hook_path, new_content)?;
         println!("Removed vibecheck from post-commit hook.");
+    }
+
+    match remove_claude_code_hook() {
+        Ok(true) => println!("Removed Claude Code Stop hook from ~/.claude/settings.json"),
+        Ok(false) => {}
+        Err(e) => eprintln!("Could not remove Claude Code hook: {}", e),
     }
 
     Ok(())
