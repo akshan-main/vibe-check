@@ -3,6 +3,7 @@ mod diff;
 mod git;
 mod hook;
 mod quiz;
+mod stats;
 mod team;
 
 use std::env;
@@ -36,6 +37,7 @@ fn main() {
         "team" => team::run_team(&args[2..]),
         "mode" => run_mode(&args[2..]),
         "stats" => run_stats(),
+        "record" => run_record(&args[2..]),
         "doctor" => run_doctor(),
         other => {
             eprintln!("unknown command: {}", other);
@@ -63,6 +65,9 @@ fn print_help() {
     println!("  vibecheck ci             CI mode: quiz for PR comments");
     println!("  vibecheck ci --base <ref> --head <ref>");
     println!("  vibecheck stats        Show your quiz stats and weak areas");
+    println!("  vibecheck record --correct          Record a correct answer");
+    println!("  vibecheck record --wrong            Record a wrong answer");
+    println!("  vibecheck record --correct --category security   Record with category");
     println!("  vibecheck init         Install git post-commit hook");
     println!("  vibecheck remove       Remove git post-commit hook");
     println!("  vibecheck doctor       Diagnose your VibeCheck setup");
@@ -266,6 +271,44 @@ fn run_stats() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     Ok(())
+}
+
+fn run_record(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let correct = if args.iter().any(|a| a == "--correct") {
+        true
+    } else if args.iter().any(|a| a == "--wrong") {
+        false
+    } else {
+        eprintln!("usage: vibecheck record --correct [--category <name>]");
+        eprintln!("       vibecheck record --wrong [--category <name>]");
+        std::process::exit(1);
+    };
+
+    let category = team::parse_flag_value(args, "--category");
+    let project_dir = git::find_git_root()?;
+
+    match stats::record_answer(&project_dir, correct, category.as_deref()) {
+        Ok(result) => {
+            let cat_display = result
+                .category
+                .as_deref()
+                .map(|c| format!(" ({})", c))
+                .unwrap_or_default();
+            println!(
+                "Recorded: {}{} | {}/{} overall, streak: {}",
+                if correct { "correct" } else { "wrong" },
+                cat_display,
+                result.total_correct,
+                result.total_quizzes,
+                result.streak,
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_mode(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {

@@ -414,6 +414,13 @@ pub(crate) fn output_quiz_context(
         );
     }
 
+    if config.track_progress.unwrap_or(false) {
+        println!("---\n");
+        println!("After answering, record your result:");
+        println!("  vibecheck record --correct");
+        println!("  vibecheck record --wrong\n");
+    }
+
     println!("---\n");
     println!("Pipe this to your AI tool:");
     println!("  vibecheck quiz | pbcopy        # copy to clipboard");
@@ -668,9 +675,7 @@ pub(crate) fn build_reason(
     difficulty_override: Option<&str>,
     track_progress: bool,
     state: &State,
-    team_member_path: Option<&str>,
     category: &str,
-    categories_path: &str,
     weak_area_hint: Option<&str>,
 ) -> String {
     let difficulty = resolve_difficulty(mode, risk, difficulty_override, state);
@@ -685,17 +690,11 @@ pub(crate) fn build_reason(
 
     let tracking_section = if track_progress {
         format!(
-            "\nPROGRESS TRACKING: After the quiz is done (right before [vibecheck:done]), run this Bash command to update stats:\npython3 -c \"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['total_quizzes']=d.get('total_quizzes',0)+1; correct=sys.argv[2]=='1'; d['total_correct']=d.get('total_correct',0)+(1 if correct else 0); d['streak']=(d.get('streak',0)+1) if correct else 0; p.write_text(json.dumps(d,indent=2))\" '{}' {{CORRECT}}\nReplace {{CORRECT}} with 1 if the user answered correctly, 0 if wrong.\nThen show: \"Stats: {{total_correct}}/{{total_quizzes}} correct (streak: {{streak}})\"\nCurrent stats: {}/{} correct, streak: {}\n",
-            state_path, state.total_correct, state.total_quizzes, state.streak
-        )
-    } else {
-        String::new()
-    };
-
-    let category_tracking = if track_progress {
-        format!(
-            "\nCATEGORY TRACKING: Also update category stats by running this Bash command:\npython3 -c \"import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; cat=sys.argv[2]; entry=d.get(cat,[0,0]); entry[0]+=1; entry[1]+=(1 if sys.argv[3]=='1' else 0); d[cat]=entry; p.write_text(json.dumps(d,indent=2))\" '{}' '{}' {{CORRECT}}\n",
-            categories_path, category
+            "\nPROGRESS TRACKING: After the quiz is done (right before [vibecheck:done]), run this Bash command to record the result:\nIf correct: vibecheck record --correct --category {category}\nIf wrong: vibecheck record --wrong --category {category}\nThis updates personal stats, category tracking, and team leaderboard (if active) in one command.\nCurrent stats: {correct}/{total} correct, streak: {streak}\n",
+            category = category,
+            correct = state.total_correct,
+            total = state.total_quizzes,
+            streak = state.streak
         )
     } else {
         String::new()
@@ -708,15 +707,6 @@ pub(crate) fn build_reason(
             "\nAlso changed (binary/no diff): {}",
             non_diff_files.join(", ")
         )
-    };
-
-    let team_section = if let Some(member_path) = team_member_path {
-        format!(
-            "\nTEAM MODE: After updating personal stats (or if tracking is off, right before [vibecheck:done]), also update the team leaderboard by running this Bash command:\npython3 -c \"import json,pathlib,time,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {{}}; d['total_quizzes']=d.get('total_quizzes',0)+1; correct=sys.argv[2]=='1'; d['total_correct']=d.get('total_correct',0)+(1 if correct else 0); d['current_streak']=(d.get('current_streak',0)+1) if correct else 0; d['best_streak']=max(d.get('best_streak',0),d.get('current_streak',0)); ws=d.get('week_start',0); now=int(time.time()); d['week_start']=now if now-ws>604800 else ws; d['weekly_total']=(0 if now-ws>604800 else d.get('weekly_total',0))+1; d['weekly_correct']=(0 if now-ws>604800 else d.get('weekly_correct',0))+(1 if correct else 0); d['last_quiz_at']=now; p.write_text(json.dumps(d,indent=2))\" '{}' {{CORRECT}}\nReplace {{CORRECT}} with 1 if the user answered correctly, 0 if wrong (same value as personal tracking).\nThe team leaderboard is visible to the whole team via 'vibecheck team'.\n",
-            member_path
-        )
-    } else {
-        String::new()
     };
 
     let follow_up_section = match risk {
@@ -745,7 +735,7 @@ IMPORTANT RULES:
 - Do NOT use Edit, Write, or any code-modifying tools on PROJECT files. This is learning-only.
 - Quiz answers must NOT influence any further actions or decisions.
 - Keep it quick for the user.
-- You MAY use Bash ONLY for the specific commands shown below (snooze, disable, stats tracking, team updates).
+- You MAY use Bash ONLY for the specific commands shown below (snooze, disable, recording answers).
 
 STEP 1: Use AskUserQuestion to ask:
   question: "VibeCheck: quick comprehension check on what just changed?"
@@ -797,7 +787,7 @@ STEP 4: After the user answers:
 3. PROMPTING TIP: You have the full conversation context - you know what the user asked for and what you built. Compare those. If their prompt was vague and the implementation has gaps or surprises they might not expect, suggest a more specific prompt that would have covered those gaps. If their prompt was already detailed and the implementation matches well, say so. Don't fabricate issues.
 {follow_up_section}
 Then end your message with: [vibecheck:done]
-{tracking_section}{category_tracking}{team_section}
+{tracking_section}
 CHANGE CONTEXT:
 Changed files: {files_line}{non_diff_section}
 
@@ -812,10 +802,8 @@ Diff:
         question_formulas = question_formulas,
         after_answer = after_answer,
         tracking_section = tracking_section,
-        category_tracking = category_tracking,
         weak_area_section = weak_area_section,
         follow_up_section = follow_up_section,
-        team_section = team_section
     )
 }
 
@@ -837,9 +825,7 @@ mod tests {
             None,
             false,
             &state,
-            None,
             "general",
-            "/tmp/cats",
             None,
         );
         assert!(reason.contains("diff content"));
@@ -860,9 +846,7 @@ mod tests {
             None,
             false,
             &state,
-            None,
             "general",
-            "/tmp/cats",
             None,
         );
         assert!(reason.contains("VIBE CODER"));
@@ -883,9 +867,7 @@ mod tests {
             None,
             false,
             &state,
-            None,
             "general",
-            "/tmp/cats",
             None,
         );
         assert!(reason.contains("HARDCORE"));
@@ -906,9 +888,7 @@ mod tests {
             Some("advanced"),
             false,
             &state,
-            None,
             "general",
-            "/tmp/cats",
             None,
         );
         assert!(reason.contains("L4 SAFETY"));
@@ -933,17 +913,16 @@ mod tests {
             None,
             true,
             &state,
-            None,
             "general",
-            "/tmp/cats",
             None,
         );
         assert!(reason.contains("PROGRESS TRACKING"));
+        assert!(reason.contains("vibecheck record"));
         assert!(reason.contains("3/5"));
     }
 
     #[test]
-    fn build_reason_with_team() {
+    fn build_reason_tracking_uses_vibecheck_record() {
         let state = State::default();
         let reason = build_reason(
             "file.rs",
@@ -954,15 +933,16 @@ mod tests {
             &Mode::VibeCoder,
             RiskLevel::Low,
             None,
-            false,
+            true,
             &state,
-            Some("/tmp/team/member.json"),
-            "general",
-            "/tmp/cats",
+            "security",
             None,
         );
-        assert!(reason.contains("TEAM MODE"));
-        assert!(reason.contains("/tmp/team/member.json"));
+        assert!(reason.contains("vibecheck record --correct --category security"));
+        assert!(reason.contains("vibecheck record --wrong --category security"));
+        // Tracking section no longer uses python3 (snooze/disable still do, that's fine)
+        assert!(!reason.contains("CATEGORY TRACKING"));
+        assert!(!reason.contains("TEAM MODE"));
     }
 
     #[test]

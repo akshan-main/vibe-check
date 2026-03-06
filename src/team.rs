@@ -1,4 +1,5 @@
 use crate::git::git_cmd;
+use crate::stats::verify_chain;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -24,6 +25,10 @@ pub(crate) struct TeamMember {
     pub(crate) week_start: u64,
     pub(crate) last_quiz_at: u64,
     pub(crate) joined_at: u64,
+    #[serde(default)]
+    pub(crate) chain_hash: String,
+    #[serde(default)]
+    pub(crate) chain_length: u64,
 }
 
 pub(crate) fn run_team(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -129,15 +134,9 @@ fn team_join(
     let member = TeamMember {
         name: display_name.clone(),
         email_hash: email_hash.clone(),
-        total_quizzes: 0,
-        total_correct: 0,
-        current_streak: 0,
-        best_streak: 0,
-        weekly_correct: 0,
-        weekly_total: 0,
         week_start: now,
-        last_quiz_at: 0,
         joined_at: now,
+        ..Default::default()
     };
 
     fs::create_dir_all(team_dir.join("members"))?;
@@ -238,19 +237,26 @@ pub(crate) fn team_stats(team_dir: &Path) -> Result<(), Box<dyn std::error::Erro
             "-".to_string()
         };
 
+        let verified = verify_chain(m);
         let name_display = if m.name.len() > 14 {
             format!("{}...", &m.name[..11])
         } else {
             m.name.clone()
         };
+        let verified_flag = if !verified && m.total_quizzes > 0 {
+            " [unverified]"
+        } else {
+            ""
+        };
 
         println!(
-            " {:<3} {:<14} {:>5.0}% {:>8} {:>11}",
+            " {:<3} {:<14} {:>5.0}% {:>8} {:>11}{}",
             i + 1,
             name_display,
             score,
             streak_display,
             weekly_display,
+            verified_flag,
         );
 
         team_weekly_total += m.weekly_total;
@@ -295,6 +301,8 @@ fn team_reset(team_dir: &Path, project_dir: &Path) -> Result<(), Box<dyn std::er
     member.weekly_correct = 0;
     member.weekly_total = 0;
     member.week_start = now;
+    member.chain_hash = String::new();
+    member.chain_length = 0;
 
     fs::write(&member_path, serde_json::to_string_pretty(&member)?)?;
 
@@ -402,6 +410,7 @@ mod tests {
             week_start: 100,
             last_quiz_at: 200,
             joined_at: 50,
+            ..Default::default()
         };
         let json = serde_json::to_string_pretty(&member).unwrap();
         let parsed: TeamMember = serde_json::from_str(&json).unwrap();
@@ -496,6 +505,7 @@ mod tests {
             week_start: now,
             last_quiz_at: now,
             joined_at: now - 1000,
+            ..Default::default()
         };
         let member2 = TeamMember {
             name: "Bob".to_string(),
@@ -509,6 +519,7 @@ mod tests {
             week_start: now,
             last_quiz_at: now,
             joined_at: now - 500,
+            ..Default::default()
         };
 
         fs::write(
@@ -547,6 +558,7 @@ mod tests {
             week_start: 100,
             last_quiz_at: 200,
             joined_at: 50,
+            ..Default::default()
         };
         let member_path = team_dir.join("members").join("cccc3333.json");
         fs::write(&member_path, serde_json::to_string_pretty(&member).unwrap()).unwrap();

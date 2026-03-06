@@ -19,6 +19,9 @@
     <a href="#update">Update</a> &middot;
     <a href="#faq">FAQ</a>
   </p>
+  <p align="center">
+    <img src="docs/vibecheck_demo.gif" alt="VibeCheck demo" width="600">
+  </p>
 </p>
 
 ---
@@ -177,7 +180,7 @@ Claude Code gets a couple extras because of its [hooks system](https://docs.anth
 
 ### Why Rust?
 
-VibeCheck is a single static binary. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos. Score tracking updates use python3 one-liners when available.
+VibeCheck is a single static binary with no runtime dependencies. It starts in under a millisecond as a git hook (Python hooks add 200-500ms to every commit). It runs multiple git commands in parallel using OS threads to collect your diff context fast, even on large repos.
 
 ## Modes
 
@@ -229,9 +232,18 @@ Enable tracking in your config:
 { "trackProgress": true }
 ```
 
-Auto-tracking and weak-area adaptation work in the Claude Code Stop hook. For other tools (git hook, manual `vibecheck quiz`), the quiz output is context-only - stats are not tracked automatically.
+After answering a quiz, record your result:
+```bash
+vibecheck record --correct
+vibecheck record --wrong
+vibecheck record --correct --category security
+```
 
-When weak areas are detected (under 60% accuracy with 3+ quizzes in Claude Code), the hook steers questions toward that area. The scores reflect what the LLM thinks, not ground truth - but patterns over time still tell you where to pay more attention.
+This updates personal stats, category tracking, and team leaderboard in one command. Works with any tool.
+
+In Claude Code, the Stop hook runs `vibecheck record` automatically after each quiz. For other tools, run it manually after answering.
+
+When weak areas are detected (under 60% accuracy with 3+ quizzes), future quizzes steer toward that area. The scores reflect what the LLM thinks, not ground truth - but patterns over time still tell you where to pay more attention.
 
 ## CI Gate
 
@@ -284,7 +296,7 @@ Or add the steps to your existing workflow:
 
 ## Team Mode
 
-A lightweight leaderboard so your team can see who's been reading their diffs. Not a substitute for code review or talking to each other - just a nudge to keep everyone honest. No server needed, stats sync through git.
+A lightweight leaderboard so your team can see who's been reading their diffs. Not a substitute for code review or talking to each other - just a nudge to keep everyone honest. No server needed - stats are JSON files in the repo that sync through git. Works with any tool.
 
 ```bash
 # One person sets it up
@@ -315,7 +327,8 @@ How it works:
 - Each member identified by a hash of their git email (privacy-friendly)
 - Commit the directory to git so the team can see each other's progress
 - Weekly stats reset automatically
-- When team mode is active and `trackProgress` is enabled, the quiz automatically updates both personal and team stats
+- `vibecheck record` updates both personal and team stats - works with any AI tool
+- Each record is hash-chained (SHA-256). If someone manually edits their stats, `vibecheck team` flags them as `[unverified]`
 
 ```bash
 vibecheck team reset    # reset your own stats
@@ -438,7 +451,7 @@ Yes. Set `minSecondsBetweenQuizzes` in `vibecheck.json`. Default is 900 (15 minu
 <details>
 <summary><strong>Does it store my answers?</strong></summary>
 
-By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress` and use the Claude Code Stop hook, scores are stored locally in that same state file, per-category accuracy goes in `categories.json`, and stats optionally sync to your team leaderboard.
+By default, no. A small state file (`.claude/.vibecheck/state.json`) tracks the last quiz timestamp for throttling. If you enable `trackProgress`, running `vibecheck record` after each quiz stores scores in that state file, per-category accuracy in `categories.json`, and team stats in `.vibecheck-team/` if team mode is active. Works with any AI tool.
 </details>
 
 <details>

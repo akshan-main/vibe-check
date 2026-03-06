@@ -4,7 +4,6 @@ use crate::git::{git_cmd, is_git_repo, resolve_project_dir, HookPayload};
 use crate::quiz::{
     build_explain_reason, build_reason, collect_working_context, detect_primary_category,
 };
-use crate::team::get_team_context;
 use serde::Serialize;
 use std::fs;
 use std::io::Read;
@@ -136,15 +135,8 @@ pub(crate) fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
     let mode = config.mode.clone().unwrap_or(Mode::VibeCoder);
     let track_progress = config.track_progress.unwrap_or(false);
 
-    let team_member_path = if track_progress {
-        get_team_context(&project_dir).map(|(_, path)| path.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
     let category = detect_primary_category(&summary);
     let categories_path = state_dir.join("categories.json");
-    let categories_path_str = categories_path.to_string_lossy().to_string();
     let weak_area_hint = compute_weak_area_hint(&categories_path);
 
     let state_path_str = state_path.to_string_lossy().to_string();
@@ -172,9 +164,7 @@ pub(crate) fn run_hook() -> Result<(), Box<dyn std::error::Error>> {
             config.difficulty.as_deref(),
             track_progress,
             &state,
-            team_member_path.as_deref(),
             category,
-            &categories_path_str,
             weak_area_hint.as_deref(),
         )
     };
