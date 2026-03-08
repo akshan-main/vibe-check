@@ -90,7 +90,7 @@ Put it somewhere on your PATH, then run `vibecheck init`.
 
 ```
 You: "Add rate limiting to the API"
-AI: *writes code, commits*
+AI: *writes code*
 
   ┌─────────────────────────────────────────────────────┐
   │  You just added rate limiting. When a user hits     │
@@ -457,7 +457,7 @@ If something isn't working, run:
 vibecheck doctor
 ```
 
-This prints your config path, git repo status, team mode status, Claude Code Stop hook status, and current config values.
+This prints your config path, git repo status, team mode status, post-commit hook status, Claude Code Stop hook status, and current config values.
 
 ## Contributing
 

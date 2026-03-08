@@ -85,8 +85,8 @@ fn print_help() {
     println!("  vibecheck init              Auto-quiz after every commit");
     println!("  vibecheck team init         Start tracking team stats\n");
     println!("WORKS WITH:");
-    println!("  Claude Code, Cursor, Windsurf, OpenClaw, PicoClaw,");
-    println!("  NanoClaw, Cline, Aider, or any AI tool that reads text.\n");
+    println!("  Claude Code (auto-quiz via Stop hook)");
+    println!("  CI mode works with any GitHub Actions workflow.\n");
     println!("CONFIG: .claude/vibecheck.json or ~/.claude/vibecheck.json");
     println!("DOCS:   https://github.com/akshan-main/vibe-check");
 }
@@ -344,6 +344,24 @@ fn run_mode(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn has_vibecheck_stop_hook(path: &PathBuf) -> Option<()> {
+    let content = fs::read_to_string(path).ok()?;
+    let settings: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let stop = settings.get("hooks")?.get("Stop")?.as_array()?;
+    for entry in stop {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            for h in hooks {
+                if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                    if cmd.contains("vibecheck") {
+                        return Some(());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
     println!("vibecheck doctor\n");
 
@@ -398,6 +416,22 @@ fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "not installed"
         }
+    );
+
+    let project_settings = project_dir.join(".claude").join("settings.json");
+    let global_settings = env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".claude").join("settings.json"));
+    let stop_hook_found = has_vibecheck_stop_hook(&project_settings)
+        .map(|_| "installed (project)")
+        .or_else(|| {
+            global_settings
+                .as_ref()
+                .and_then(|p| has_vibecheck_stop_hook(p).map(|_| "installed (global)"))
+        });
+    println!(
+        "Claude Code Stop hook: {}",
+        stop_hook_found.unwrap_or("not installed")
     );
 
     let cfg = config::load_config(&project_dir);
