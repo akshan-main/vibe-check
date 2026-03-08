@@ -1,6 +1,6 @@
 [package]
 name = "vibe-check"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.70"
 description = "Forces you to read your AI-generated diffs. One question per change."
